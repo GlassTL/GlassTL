@@ -1,0 +1,69 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.29324.140
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GlassTL", "Glass.TL\GlassTL.csproj", "{43091439-79B3-40E6-97FF-ADF2DC0815BD}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GlassTL.Examples", "Glass.TL.Examples\GlassTL.Examples.csproj", "{0E462BF4-6183-4EE1-B79C-C8FCE26452AD}"
+	ProjectSection(ProjectDependencies) = postProject
+		{43091439-79B3-40E6-97FF-ADF2DC0815BD} = {43091439-79B3-40E6-97FF-ADF2DC0815BD}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{43091439-79B3-40E6-97FF-ADF2DC0815BD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{43091439-79B3-40E6-97FF-ADF2DC0815BD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{43091439-79B3-40E6-97FF-ADF2DC0815BD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{43091439-79B3-40E6-97FF-ADF2DC0815BD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0E462BF4-6183-4EE1-B79C-C8FCE26452AD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0E462BF4-6183-4EE1-B79C-C8FCE26452AD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0E462BF4-6183-4EE1-B79C-C8FCE26452AD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0E462BF4-6183-4EE1-B79C-C8FCE26452AD}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {634450CC-E92C-4B8D-A66E-AE245961C35D}
+	EndGlobalSection
+	GlobalSection(MonoDevelopProperties) = preSolution
+		Policies = $0
+		$0.TextStylePolicy = $1
+		$1.inheritsSet = VisualStudio
+		$1.inheritsScope = text/plain
+		$1.scope = text/x-csharp
+		$0.CSharpFormattingPolicy = $2
+		$2.IndentSwitchBody = True
+		$2.IndentBlocksInsideExpressions = True
+		$2.AnonymousMethodBraceStyle = NextLine
+		$2.PropertyBraceStyle = NextLine
+		$2.PropertyGetBraceStyle = NextLine
+		$2.PropertySetBraceStyle = NextLine
+		$2.EventBraceStyle = NextLine
+		$2.EventAddBraceStyle = NextLine
+		$2.EventRemoveBraceStyle = NextLine
+		$2.StatementBraceStyle = NextLine
+		$2.ElseNewLinePlacement = NewLine
+		$2.CatchNewLinePlacement = NewLine
+		$2.FinallyNewLinePlacement = NewLine
+		$2.WhileNewLinePlacement = DoNotCare
+		$2.ArrayInitializerWrapping = DoNotChange
+		$2.ArrayInitializerBraceStyle = NextLine
+		$2.BeforeMethodDeclarationParentheses = False
+		$2.BeforeMethodCallParentheses = False
+		$2.BeforeConstructorDeclarationParentheses = False
+		$2.NewLineBeforeConstructorInitializerColon = NewLine
+		$2.NewLineAfterConstructorInitializerColon = SameLine
+		$2.BeforeDelegateDeclarationParentheses = False
+		$2.NewParentheses = False
+		$2.SpacesBeforeBrackets = False
+		$2.inheritsSet = Mono
+		$2.inheritsScope = text/x-csharp
+		$2.scope = text/x-csharp
+	EndGlobalSection
+EndGlobal

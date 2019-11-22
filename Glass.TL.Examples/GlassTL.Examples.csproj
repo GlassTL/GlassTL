@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>netcoreapp3.0</TargetFramework>
+    <PublishTrimmed>true</PublishTrimmed>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PublishSingleFile>true</PublishSingleFile>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AssemblyName>GlassTL.Examples</AssemblyName>
+    <RootNamespace>GlassTL.Examples</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Glass.TL\GlassTL.csproj" />
+  </ItemGroup>
+</Project>
