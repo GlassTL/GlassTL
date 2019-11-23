@@ -4,18 +4,18 @@ GlassTL
 GLassTL is aimed at providing an easy way for developers to access the current layer of the Telegram API without having to do all the nitty gritty work of implementing MTProto themselves.  Due to the fact that it's written using Dotnet Core, GlassTL is multiplatform by default.  Most of the api methods are easily accessible but if you do need to send requests that are not provided, you can still build and send using the underlying connection yourself.
 
 What is supported:
-	- Telegram
-		- MTProto 2.0
-		- Layer 105
-		- 2FA Cloud Passwords
-		- Secret Chats (ToDo)
-		- Multiple Transport Methods (TCP, Websocket, etc) (ToDo)
-		- Upload/Download Files (ToDo)
-		- And More
-	- Code
-		- Async Operations
-		- Fully event driven
-		- Dynamic Schema Objects
+ - Telegram
+  - MTProto 2.0
+  - Layer 105
+  - 2FA Cloud Passwords
+  - Secret Chats (ToDo)
+  - Multiple Transport Methods (TCP, Websocket, etc) (ToDo)
+  - Upload/Download Files (ToDo)
+  - And More
+ - Code
+  - Async Operations
+  - Fully event driven
+  - Dynamic Schema Objects
 
 This project has been influenced, largely or in part, by the great work of:
 	- [Lonami & Telethon](https://github.com/LonamiWebs/Telethon)
