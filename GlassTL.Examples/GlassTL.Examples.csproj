@@ -12,6 +12,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Glass.TL\GlassTL.csproj" />
+    <ProjectReference Include="..\GlassTL\GlassTL.csproj" />
   </ItemGroup>
 </Project>
