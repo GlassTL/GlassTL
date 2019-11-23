@@ -2,6 +2,7 @@
 using GlassTL.Telegram.Utils;
 using GlassTL.Telegram.MTProto;
 using GlassTL.Telegram.Network;
+using System.Linq;
 
 namespace GlassTL.Telegram
 {
@@ -46,6 +47,17 @@ namespace GlassTL.Telegram
         #endregion
 
         #region Public-Methods
+
+        /// <summary>
+        /// Clears the data that pertains to a given session
+        /// </summary>
+        public void Reset()
+        {
+            TLUser = null;
+            KnownPeers.Clear();
+            Save();
+        }
+
         /// <summary>
         /// Turns the current session into a serialized byte array
         /// </summary>
@@ -85,6 +97,8 @@ namespace GlassTL.Telegram
                 BoolUtil.Serialize(true, writer);
                 BytesUtil.Serialize(DataCenter.Serialize(), writer);
             }
+            
+            BytesUtil.Serialize(KnownPeers.Serialize(), writer);
 
             return memory.ToArray();
         }
@@ -110,7 +124,7 @@ namespace GlassTL.Telegram
 
             if (BoolUtil.Deserialize(reader))
             {
-                Helper = Network.MTProtoHelper.Deserialize(BytesUtil.Deserialize(reader));
+                Helper = MTProtoHelper.Deserialize(BytesUtil.Deserialize(reader));
             }
 
             TLObject TLUser = null;
@@ -129,13 +143,17 @@ namespace GlassTL.Telegram
                 DataCenter = DataCenter.Deserialize(BytesUtil.Deserialize(reader));
             }
 
-            return new Session(FileName)
+            var session = new Session(FileName)
             {
                 Helper = Helper,
                 TLUser = TLUser,
                 SessionExpires = SessionExpires,
                 DataCenter = DataCenter
             };
+
+            PeerManager.Deserialize(reader).ToList().ForEach(x => session.KnownPeers.AddOrUpdatePeer(x.AsTLObject()));
+
+            return session;
         }
 
         /// <summary>

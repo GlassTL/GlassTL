@@ -5,6 +5,8 @@ using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using GlassTL.Telegram.MTProto;
+using System.IO;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GlassTL.Telegram.Utils
 {
@@ -43,8 +45,6 @@ namespace GlassTL.Telegram.Utils
                 {
                     this.RawPeer[jProperty.Name] = jProperty.Value;
                 }
-
-                //this.RawPeer[jProperty.Name] = jProperty.Value;
             }
         }
 
@@ -68,6 +68,11 @@ namespace GlassTL.Telegram.Utils
         {
             return !(left == right);
         }
+
+        public TLObject AsTLObject()
+        {
+            return new TLObject(RawPeer);
+        }
     }
 
 
@@ -80,6 +85,11 @@ namespace GlassTL.Telegram.Utils
         }
 
         private readonly List<PeerInfo> Peers = new List<PeerInfo>();
+
+        public void Clear()
+        {
+            Peers.Clear();
+        }
 
         public void ParsePeers(TLObject message)
         {
@@ -111,18 +121,16 @@ namespace GlassTL.Telegram.Utils
                 else
                 {
                     Peers[itemIndex].UpdatePeerInfo(peer);
-                    //if (!Peers[itemIndex].Min ) return;
-                    //    if (UpdatedPeer.AccessHash == 0)
-                    //{
-                    //    //UpdatedPeer.AccessHash = Peers[itemIndex].AccessHash;
-                    //}
-                    //Peers[itemIndex] = UpdatedPeer;
                 }
             }
             catch (Exception ex)
             {
 
             }
+        }
+        public void AddOrUpdatePeers(PeerInfo[] peers)
+        {
+            peers.ToList().ForEach(x => AddOrUpdatePeer(x.AsTLObject()));
         }
 
         public PeerInfo? GetPeer(int ID)
@@ -132,6 +140,41 @@ namespace GlassTL.Telegram.Utils
             if (itemIndex != -1 && Peers[itemIndex].AccessHash != 0) return Peers[itemIndex];
 
             return null;
+        }
+
+        public byte[] Serialize()
+        {
+            using var memory = new MemoryStream();
+            using var writer = new BinaryWriter(memory);
+
+            IntegerUtil.Serialize(Peers.Count, writer);
+
+            Peers.ForEach(x => new TLObject(x.AsTLObject()).Serialize(writer));
+
+            return memory.ToArray();
+        }
+
+        /// <summary>
+        /// Deserilizes a PeerManager object from serialized byte array
+        /// </summary>
+        /// <param name="raw">The serialized byte array containing the raw PeerManager data</param>
+        public static PeerInfo[] Deserialize(byte[] raw)
+        {
+            using var memory = new MemoryStream(raw);
+            using var reader = new BinaryReader(memory);
+
+            return Deserialize(reader);
+        }
+
+        /// <summary>
+        /// Deserilizes a PeerManager object from a stream
+        /// </summary>
+        /// <param name="reader">The stream containing the raw PeerManager data</param>
+        public static PeerInfo[] Deserialize(BinaryReader reader)
+        {
+            return Enumerable.Range(0, IntegerUtil.Deserialize(reader))
+                .Select(x => new PeerInfo(TLObject.Deserialize(reader)))
+                .ToArray();
         }
     }
 }

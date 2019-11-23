@@ -321,6 +321,10 @@ namespace GlassTL.Telegram
                             //var dcIdx = int.Parse(resultString);
                             //throw new NetworkMigrationException(dcIdx);
                         }
+                        else if (ErrorMessage == "AUTH_KEY_UNREGISTERED")
+                        {
+                            throw new NotSignedInException("The user is either not signed in or has been manually logged out");
+                        }
                         else if (ErrorMessage == "AUTH_RESTART")
                         {
                             throw new AuthRestartException("A login attempt was already started.");
@@ -439,6 +443,15 @@ namespace GlassTL.Telegram
         {
             var args = new object[] { this, e };
             NameRequestedEvent.RaiseEventSafe(ref args);
+        }
+        private void OnClientLoggedOut(TLObjectEventArgs e)
+        {
+            // We should clear information when this happens
+            CurrentUser = null;
+            Session.Reset();
+
+            var args = new object[] { this, e };
+            ClientLoggedOutEvent.RaiseEventSafe(ref args);
         }
         private async void OnUpdate(TLObjectEventArgs e)
         {
@@ -1212,23 +1225,50 @@ namespace GlassTL.Telegram
         {
             Task.Run(async () =>
             {
-                await Connect();
-
-                if (IsUserAuthorized())
+                try
                 {
-                    // We need to send at least one request so that
-                    // Telegram will start sending us updates
-                    TLObject tmp = await RequestSafe(Schema.users.getUsers(new {
-                        id = new TLObject[] { Schema.inputUserSelf }
-                    }));
+                    // Attempt to make the initial connection
+                    await Connect();
 
-                    CurrentUser = new TLObject(tmp[0]);
-                    OnUpdateUser(new TLObjectEventArgs(CurrentUser));
+                    // The user was at least authorized when we last started.
+                    if (IsUserAuthorized())
+                    {
+                        try
+                        {
+                            // We need to send at least one request so that
+                            // Telegram will start sending us updates
+                            TLObject tmp = await RequestSafe(Schema.users.getUsers(new {
+                                id = new TLObject[] { Schema.inputUserSelf }
+                            }));
 
-                    return;
+                            // Alert to the fact we are signed in.
+                            CurrentUser = new TLObject(tmp[0]);
+                            OnUpdateUser(new TLObjectEventArgs(CurrentUser));
+
+                            // Stop so that we don't ask for the phone number
+                            return;
+                        }
+                        catch (NotSignedInException)
+                        {
+                            // If the user isn't signed in anymore, we can continue, and start the process over.
+                            Logger.Log(Logger.Level.Error, $"We were logged in before but are no longer authorized.  Starting the process over.");
+                            OnClientLoggedOut(new TLObjectEventArgs(CurrentUser));
+                        }
+                        catch (Exception ex)
+                        {
+                            // An unknown error at this point.  Since we don't know what happened, let's fail and
+                            // wait for the tickets to be opened...
+                            Logger.Log(Logger.Level.Error, $"Failed to start the client.\n\n${ex.Message}");
+                            return;
+                        }
+                    }
+
+                    OnPhoneNumberRequested(null);
                 }
-
-                OnPhoneNumberRequested(null);
+                catch (Exception ex)
+                {
+                    Logger.Log(Logger.Level.Error, $"Failed to start the client.\n\n${ex.Message}");
+                }
             });
         }
 

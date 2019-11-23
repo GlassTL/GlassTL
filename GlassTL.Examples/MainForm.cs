@@ -166,7 +166,7 @@ namespace GlassTL.Examples
         }
         private void BotClient_TermsOfServiceRequestedEventHandler(object sender, TLObjectEventArgs e)
         {
-            //if (MessageBox.Show(e.TermsOfServiceText, "Murtagh Userbot", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No)
+            //if (MessageBox.Show(e.TermsOfServiceText, "GlassTL Userbot", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No)
             //{
             //    return;
             //}
@@ -196,8 +196,7 @@ namespace GlassTL.Examples
         }
         private void BotClient_ClientLoggedOutEventHandler(object sender, TLObjectEventArgs e)
         {
-            MessageBox.Show("You have been logged out.", "Murtagh Userbot", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            Close();
+            MessageBox.Show("You have been logged out.", "GlassTL Userbot", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private async void ChangeMethodLinkLabel_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
@@ -219,7 +218,7 @@ namespace GlassTL.Examples
             }
             else
             {
-                MessageBox.Show(passwordTextBox.Tag as string, "Murtagh Userbot", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(passwordTextBox.Tag as string, "GlassTL Userbot", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
@@ -270,7 +269,7 @@ namespace GlassTL.Examples
 
         private void DeleteAccountButton_Click(object sender, EventArgs e)
         {
-            //if (MessageBox.Show("Are you sure you want to delete your account?", "Murtagh Userbot", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No)
+            //if (MessageBox.Show("Are you sure you want to delete your account?", "GlassTL Userbot", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No)
             //{
             //    return;
             //}

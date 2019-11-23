@@ -284,9 +284,10 @@ namespace GlassTL.Examples
             // 
             // RawUpdatesCheckbox
             // 
+            this.RawUpdatesCheckbox.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
             this.RawUpdatesCheckbox.AutoSize = true;
             this.RawUpdatesCheckbox.Checked = true;
-            this.RawUpdatesCheckbox.CheckState = System.Windows.Forms.CheckState.Checked;
+            this.RawUpdatesCheckbox.CheckState = System.Windows.Forms.CheckState.Unchecked;
             this.RawUpdatesCheckbox.Location = new System.Drawing.Point(188, 479);
             this.RawUpdatesCheckbox.Name = "RawUpdatesCheckbox";
             this.RawUpdatesCheckbox.Size = new System.Drawing.Size(115, 17);
@@ -322,7 +323,7 @@ namespace GlassTL.Examples
             this.Controls.Add(this.closeButton);
             this.MaximizeBox = false;
             this.Name = "MainForm";
-            this.Text = "Murtagh";
+            this.Text = "GlassTL";
             this.Load += new System.EventHandler(this.MainForm_Load);
             this.groupBox1.ResumeLayout(false);
             this.ResumeLayout(false);

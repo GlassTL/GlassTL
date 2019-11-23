@@ -33,28 +33,28 @@ namespace GlassTL.Telegram.MTProto.Crypto
             }
             public byte[] Encrypt(byte[] data, int offset, int length)
             {
-                using MemoryStream buffer = new MemoryStream(255);
-                using BinaryWriter writer = new BinaryWriter(buffer);
-                using (SHA1 sha1 = new SHA1Managed())
+                using var buffer = new MemoryStream(255);
+                using var writer = new BinaryWriter(buffer);
+                using (var sha1 = new SHA1Managed())
                 {
-                    byte[] hashsum = sha1.ComputeHash(data, offset, length);
+                    var hashsum = sha1.ComputeHash(data, offset, length);
                     writer.Write(hashsum);
                 }
 
                 buffer.Write(data, offset, length);
                 if (length < 235)
                 {
-                    byte[] padding = Helpers.GenerateRandomBytes(235 - length);
+                    var padding = Helpers.GenerateRandomBytes(235 - length);
                     buffer.Write(padding, 0, padding.Length);
                 }
 
-                byte[] ciphertext = new BigInteger(1, buffer.ToArray()).ModPow(Exponent, Modulus).ToByteArrayUnsigned();
+                var ciphertext = new BigInteger(1, buffer.ToArray()).ModPow(Exponent, Modulus).ToByteArrayUnsigned();
 
                 if (ciphertext.Length == 256) return ciphertext;
 
-                byte[] paddedCiphertext = new byte[256];
-                int paddingLength = 256 - ciphertext.Length;
-                for (int i = 0; i < paddingLength; i++)
+                var paddedCiphertext = new byte[256];
+                var paddingLength = 256 - ciphertext.Length;
+                for (var i = 0; i < paddingLength; i++)
                 {
                     paddedCiphertext[i] = 0;
                 }
@@ -199,7 +199,7 @@ namespace GlassTL.Telegram.MTProto.Crypto
         }
         private static int ReadLength(Stream s, int limit)
         {
-            int length = s.ReadByte();
+            var length = s.ReadByte();
             if (length < 0) throw new EndOfStreamException("EOF found when length expected");
 
             if (length == 0x80) return -1; // indefinite-length encoding
@@ -260,7 +260,7 @@ namespace GlassTL.Telegram.MTProto.Crypto
                 throw new Exception("This method is only valid for RSA Public Keys and has been tailored to work with Telegram's in particular.  Consider using Bouncy Castle.");
             }
 
-            string PemStripped = pemstr;
+            var PemStripped = pemstr;
 
             PemStripped = Regex.Replace(PemStripped, @"-+.*-+", "");
             PemStripped = Regex.Replace(PemStripped, @"\s*", "", RegexOptions.Singleline);
@@ -270,13 +270,13 @@ namespace GlassTL.Telegram.MTProto.Crypto
                 throw new Exception("The pem key appears to be corrupt and cannot be parsed.");
             }
 
-            byte[] PemData = Convert.FromBase64String(PemStripped);
+            var PemData = Convert.FromBase64String(PemStripped);
 
             BigInteger Modulus = null;
             BigInteger Exponent = null;
 
-            using (MemoryStream stream = new MemoryStream(PemData))
-            using (BinaryReader reader = new BinaryReader(stream))
+            using (var stream = new MemoryStream(PemData))
+            using (var reader = new BinaryReader(stream))
             {
                 int tag = 0, length = 0, Item1Tag = 0, Item1Length = 0, Item2Tag = 0, Item2Length = 0;
 
@@ -322,40 +322,23 @@ namespace GlassTL.Telegram.MTProto.Crypto
         /// <summary>
         /// Loads Telegram's RSA Public Key for use in RSA Cryptography
         /// </summary>
-        private static List<Tuple<long, RSACryptoServiceProvider>> LoadAll()
+        private static Tuple<long, RSACryptoServiceProvider>[] LoadAll()
         {
-            var Cryptos = new List<Tuple<long, RSACryptoServiceProvider>>();
-            string[] AllKeys = RSAPublicKeys(RSAKeySelection.All);
-
-            for (int i = 0; i < AllKeys.Length; i++)
+            return RSAPublicKeys(RSAKeySelection.All).Select(x =>
             {
-                var Crypto = Load(AllKeys[i]);
-                Cryptos.Add(new Tuple<long, RSACryptoServiceProvider>(Crypto.Key, Crypto.Value));
-            }
-
-            return Cryptos;
+                (var key, var value) = Load(x);
+                return new Tuple<long, RSACryptoServiceProvider>(key, value);
+            }).ToArray();
         }
 
         public static Tuple<long, byte[]> Encrypt(long[] fingerprints, byte[] data)
         {
-            var Cryptos = LoadAll();
-            Tuple<long, RSACryptoServiceProvider> Crypto = null;
-
-            for (int i = 0; i < Cryptos.Count && Crypto == null; i++)
-            foreach (long fingerprint in fingerprints)
-            if (fingerprint == Cryptos[i].Item1)
-            {
-                Crypto = Cryptos[i];
-            }
-
-            if (Crypto == null)
-            {
+            var Cryptos = LoadAll().Where(x => fingerprints.Contains(x.Item1));
+            
+            if (!Cryptos.Any())
                 throw new Exception("The server responded with an unknown fingerprint");
-            }
 
-            var key = new RSAServerKey(Crypto.Item1, Crypto.Item2);
-
-            return new Tuple<long, byte[]>(Crypto.Item1, key.Encrypt(data));
+            return new Tuple<long, byte[]>(Cryptos.First().Item1, new RSAServerKey(Cryptos.First().Item1, Cryptos.First().Item2).Encrypt(data));
         }
     }
 }

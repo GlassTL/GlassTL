@@ -132,9 +132,9 @@ namespace GlassTL.Telegram.Network
                     // Encrypt the PQ information.
                     // NOTE: Because the server responded with potentially more than one fingerprint,
                     // this also returns the fingerprint that we are using.
-                    var EncryptedPQInnerData = MTProto.Crypto.RSA.Encrypt(ResPQ["server_public_key_fingerprints"].ToObject<long[]>(), PQInnerData.Serialize());
+                    (var fingerpint, var EncryptedInnerData) = MTProto.Crypto.RSA.Encrypt(ResPQ["server_public_key_fingerprints"].ToObject<long[]>(), PQInnerData.Serialize());
 
-                    Logger.Log(Logger.Level.Debug, $"Using Public RSA Key: {EncryptedPQInnerData.Item1}");
+                    Logger.Log(Logger.Level.Debug, $"Using Public RSA Key: {fingerpint}");
 
                     // Get ready for the next response
                     CurrentState = AuthenticationState.ServerDHRequest;
@@ -148,8 +148,8 @@ namespace GlassTL.Telegram.Network
                         server_nonce = ResPQ["server_nonce"],
                         p = factorizedPair["min"],
                         q = factorizedPair["max"],
-                        public_key_fingerprint = EncryptedPQInnerData.Item1,
-                        encrypted_data = EncryptedPQInnerData.Item2
+                        public_key_fingerprint = fingerpint,
+                        encrypted_data = EncryptedInnerData
                     }));
 
                     break;
