@@ -23,6 +23,6 @@ This project has been influenced, largely or in part, by the great work of:
  - [Daniil & MadelineProto](https://github.com/danog/MadelineProto)
  - [Telegram Official Clients](https://telegram.org/apps#source-code)
 
-Warning: GlassTL is currectly in an Alpha stage.  This means that you cannot expect anything to work properly or efficiently and that current ways of doing things are likely to change.  During this time, suggestions and feedback are welcome.  If you'd like to be a star player, you can even help by adding to the features yourself.  Documentation and Wiki, of course, needs to be added as well as code examples.  Remember that everyone who contributes also has lives of their own and that means updates may not come when you expect.
+Warning: GlassTL is currectly in an Alpha stage.  This means that you cannot expect anything to work properly or efficiently and that current ways of doing things are likely to change.  During this time, suggestions and feedback are welcome.  If you'd like to be a star player, you can even help by adding to the features yourself.  Documentation and Wiki, of course, need to be added as well as code examples.  Remember that everyone who contributes also has lives of their own and that means updates may not come when you expect.
 
 Please join the discussions on [Telegram](https://t.me/GlassTL) if you'd like to be a more personal part of GlassTL.
