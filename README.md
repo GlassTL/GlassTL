@@ -1,7 +1,7 @@
 GlassTL
 -------------------------------
 
-GLassTL is aimed at providing an easy way for developers to access the current layer of the Telegram API without having to do all the nitty gritty work of implementing MTProto themselves.  Due to the fact that it's written using Dotnet Core, GlassTL is multiplatform by default.  Most of the api methods are easily accessible but if you do need to send requests that are not provided, you can still build and send using the underlying connection yourself.
+GlassTL is aimed at providing an easy way for developers to access the current layer of the Telegram API without having to do all the nitty gritty work of implementing MTProto themselves.  Due to the fact that it's written using Dotnet Core, GlassTL is multiplatform by default.  Most of the api methods are easily accessible but if you do need to send requests that are not provided, you can still build and send using the underlying connection yourself.
 
 What is supported:
  - Telegram
