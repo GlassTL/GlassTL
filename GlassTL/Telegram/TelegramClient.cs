@@ -281,6 +281,9 @@ namespace GlassTL.Telegram
                         Success = true;
                         continue;
                     }
+
+                    OnUpdate(new TLObjectEventArgs(result));
+
                     if ((string)result["_"] == "rpc_error")
                     {
                         var ErrorMessage = (string)result["error_message"];
@@ -631,6 +634,8 @@ namespace GlassTL.Telegram
 
                 // Let the user know we got account
                 OnUpdateUser(new TLObjectEventArgs(CurrentUser));
+
+                CurrentUser = new TLObject(CurrentUser["user"]);
 
                 // Success
                 return true;

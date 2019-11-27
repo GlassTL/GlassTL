@@ -151,7 +151,9 @@ namespace GlassTL.Telegram
                 DataCenter = DataCenter
             };
 
-            PeerManager.Deserialize(reader).ToList().ForEach(x => session.KnownPeers.AddOrUpdatePeer(x.AsTLObject()));
+            PeerManager
+                .Deserialize(reader).ToList()
+                .ForEach(x => session.KnownPeers.AddOrUpdatePeer(x.AsTLObject()));
 
             return session;
         }
