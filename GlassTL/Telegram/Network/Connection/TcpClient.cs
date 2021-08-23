@@ -1,13 +1,15 @@
-﻿using System;
-using System.IO;
-using System.Net;
-using System.Net.Sockets;
-using System.Threading;
-using System.Threading.Tasks;
-using GlassTL.Telegram.Utils;
-
-namespace GlassTL.Telegram.Network
+﻿namespace GlassTL.Telegram.Network.Connection
 {
+    using System;
+    using System.Diagnostics.CodeAnalysis;
+    using System.IO;
+    using System.Net;
+    using System.Net.Sockets;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using EventArgs;
+    using Utils;
+
     /// <summary>
     /// TCP client with events.  
     /// Set the Connected, Disconnected, and DataReceived callbacks.  
@@ -25,19 +27,19 @@ namespace GlassTL.Telegram.Network
         /// </summary>
         public event EventHandler DisconnectedEvent;
         /// <summary>
-        /// Raied when byte data has become available from the server.
+        /// Raised when byte data has become available from the server.
         /// </summary>
         public event EventHandler<DataReceivedEventArgs> DataReceivedEvent;
 
         /// <summary>
         /// Indicates whether or not the client is connected to the server.
         /// </summary>
-        public bool Connected { get; private set; } = false;
+        public bool Connected { get; private set; }
 
         /// <summary>
         /// Gets the remote IP
         /// </summary>
-        public IPAddress RemoteIP { get; private set; }
+        public IPAddress RemoteIp { get; private set; }
 
         /// <summary>
         /// Gets the remote port
@@ -46,14 +48,16 @@ namespace GlassTL.Telegram.Network
         #endregion
 
         #region Private-Members
-        private System.Net.Sockets.TcpClient Client { get; set; } = null;
+        private System.Net.Sockets.TcpClient Client { get; set; }
         private NetworkStream NetworkStream { get; set; }
 
-        private CancellationTokenSource TokenSource { get; set; } = null;
+        private CancellationTokenSource TokenSource { get; set; }
         private CancellationToken Token => TokenSource?.Token ?? CancellationToken.None;
-        private SemaphoreSlim SemaphoreSlim { get; } = new SemaphoreSlim(1, 1);
+        private SemaphoreSlim SemaphoreSlim { get; } = new(1, 1);
 
-        private Task DataReceiverLoop = null;
+
+        [SuppressMessage("CodeQuality", "IDE0052:Remove unread private members", Justification = "Retained for future access")]
+        private Task DataReceiverLoop { get; set; }
         #endregion
 
         #region Constructors-and-Factories
@@ -133,35 +137,35 @@ namespace GlassTL.Telegram.Network
         /// <summary>
         /// Establish the connection to the server.
         /// </summary>
-        /// <param name="RemoteIP">The server IP address.</param>
-        /// <param name="Port">The TCP port on which to connect.</param>
-        /// <param name="ConnectionTimeout">The timeout for this operation in milliseonds</param>
-        public void Connect(IPAddress RemoteIP, int Port, int ConnectionTimeout = 5000)
+        /// <param name="remoteIp">The server IP address.</param>
+        /// <param name="port">The TCP port on which to connect.</param>
+        /// <param name="connectionTimeout">The timeout for this operation in milliseconds</param>
+        public void Connect(IPAddress remoteIp, int port, int connectionTimeout = 5000)
         {
             Logger.Log(Logger.Level.Info, "Attempting connection to the remote socket");
 
             try
             {
-                if (Port < 0) throw new ArgumentException("Negative values not supported.", nameof(Port));
-                if (ConnectionTimeout < 0) throw new ArgumentException("ConnectionTimeout must be zero or greater.", nameof(ConnectionTimeout));
+                if (port < 0) throw new ArgumentException("Negative values not supported.", nameof(port));
+                if (connectionTimeout < 0) throw new ArgumentException("ConnectionTimeout must be zero or greater.", nameof(connectionTimeout));
 
-                this.RemoteIP = RemoteIP ?? throw new ArgumentNullException("Null values are not supported", nameof(RemoteIP));
-                this.Port = Port;
+                RemoteIp = remoteIp ?? throw new ArgumentNullException(nameof(remoteIp), "Null values are not supported");
+                Port = port;
 
                 TokenSource = new CancellationTokenSource();
                 Client = new System.Net.Sockets.TcpClient();
 
-                Logger.Log(Logger.Level.Debug, $"Timeout: {ConnectionTimeout}");
+                Logger.Log(Logger.Level.Debug, $"Timeout: {connectionTimeout}");
                 Logger.Log(Logger.Level.Debug, "Beginning socket connection");
 
-                var ar = Client.BeginConnect(RemoteIP, Port, null, null);
+                var ar = Client.BeginConnect(remoteIp, port, null, null);
 
                 try
                 {
-                    if (!ar.AsyncWaitHandle.WaitOne(ConnectionTimeout, false))
+                    if (!ar.AsyncWaitHandle.WaitOne(connectionTimeout, false))
                     {
                         Client.Close();
-                        throw new TimeoutException($"Timeout connecting to {this.RemoteIP}:{this.Port}");
+                        throw new TimeoutException($"Timeout connecting to {RemoteIp}:{Port}");
                     }
 
                     Client.EndConnect(ar);
@@ -171,10 +175,6 @@ namespace GlassTL.Telegram.Network
                     NetworkStream = Client.GetStream();
                     Connected = true;
                 }
-                catch (Exception)
-                {
-                    throw;
-                }
                 finally
                 {
                     ar.AsyncWaitHandle.Close();
@@ -182,8 +182,7 @@ namespace GlassTL.Telegram.Network
 
                 Logger.Log(Logger.Level.Info, $"Raising the {nameof(ConnectedEvent)} event");
 
-                var args = new object[] { this, EventArgs.Empty };
-                ConnectedEvent.RaiseEventSafe(ref args);
+                ConnectedEvent.RaiseEventSafe(this, EventArgs.Empty);
 
                 Logger.Log(Logger.Level.Info, $"Starting socket monitoring");
 
@@ -204,24 +203,24 @@ namespace GlassTL.Telegram.Network
         {
             Logger.Log(Logger.Level.Info, $"Attempting to send data on the socket level");
 
-            if (data == null || data.Length < 1) throw new ArgumentNullException("Cannot send null info.  Skipping.", nameof(data));
+            if (data == null || data.Length < 1) throw new ArgumentNullException(nameof(data), "Cannot send null info.  Skipping.");
             if (!Connected) throw new IOException("Not connected to the server");
-
-            Logger.Log(Logger.Level.Debug, $"Waiting for the socket to be available");
-
-            // Asynchronously wait to enter the Semaphore.
-            // If no one has been granted access to the Semaphore,
-            // code execution will proceed, otherwise this thread
-            // waits here until the semaphore is released 
-            await SemaphoreSlim.WaitAsync();
-
-            Logger.Log(Logger.Level.Info, $"Obtained lock on socket.");
-            Logger.Log(Logger.Level.Debug, $"Sending {data.Length} bytes");
-
+            
             try
             {
-                await NetworkStream.WriteAsync(data, 0, data.Length);
-                NetworkStream.Flush();
+                Logger.Log(Logger.Level.Debug, $"Waiting for the socket to be available");
+                
+                // Asynchronously wait to enter the Semaphore.
+                // If no one has been granted access to the Semaphore,
+                // code execution will proceed, otherwise this thread
+                // waits here until the semaphore is released 
+                await SemaphoreSlim.WaitAsync(Token);
+
+                Logger.Log(Logger.Level.Info, $"Obtained lock on socket.");
+                Logger.Log(Logger.Level.Debug, $"Sending {data.Length} bytes");
+
+                await NetworkStream.WriteAsync(data.AsMemory(0, data.Length), Token);
+                await NetworkStream.FlushAsync(Token);
             }
             catch (Exception ex)
             {
@@ -260,21 +259,21 @@ namespace GlassTL.Telegram.Network
                 while (true)
                 {
                     // Determine if we can loop
-                    if (token.IsCancellationRequested || Client == null || !Client.Connected)
+                    if (token.IsCancellationRequested || Client is not {Connected: true})
                     {
                         Logger.Log(Logger.Level.Debug, $"Halting socket monitoring...");
                         break;
                     }
 
                     // Read data.  This should not return until data is received
-                    byte[] data = await DataReadAsync(token);
+                    var data = await DataReadAsync(token);
 
                     // Obviously, if there's no data, there's an issue
                     if (data == null)
                     {
                         Logger.Log(Logger.Level.Warning, $"Read null bytes from the socket.  Skipping...");
                         // Wait for a bit and try again
-                        await Task.Delay(30);
+                        await Task.Delay(30, token);
                         continue;
                     }
 
@@ -283,9 +282,8 @@ namespace GlassTL.Telegram.Network
                     // Raise the event unawaited so that we can keep looping in case more data comes in
                     _ = Task.Run(() =>
                     {
-                        var args = new object[] { this, new DataReceivedEventArgs(data) };
-                        DataReceivedEvent.RaiseEventSafe(ref args);
-                    });
+                        DataReceivedEvent.RaiseEventSafe(this, new DataReceivedEventArgs(data));
+                    }, CancellationToken.None);
                 }
             }
             catch (TaskCanceledException)
@@ -304,9 +302,8 @@ namespace GlassTL.Telegram.Network
             Logger.Log(Logger.Level.Debug, $"Raising the {nameof(DisconnectedEvent)} event");
             _ = Task.Run(() =>
             {
-                var args = new object[] { this, EventArgs.Empty };
-                DisconnectedEvent.RaiseEventSafe(ref args);
-            });
+                DisconnectedEvent.RaiseEventSafe(this, EventArgs.Empty);
+            }, CancellationToken.None);
         }
         /// <summary>
         /// Reads and returns a byte array when available from the socket
@@ -315,45 +312,31 @@ namespace GlassTL.Telegram.Network
         {
             try
             {
-                // Ensure that we the connection wasn't closed or cancelled
-                if (Client == null || !Client.Connected || token.IsCancellationRequested)
-                {
-                    throw new OperationCanceledException();
-                }
-                else if (!NetworkStream.CanRead)
-                {
-                    throw new IOException();
-                }
+                // Ensure that the connection wasn't closed or cancelled
+                if (Client is not {Connected: true} || token.IsCancellationRequested) throw new OperationCanceledException();
+                if (!NetworkStream.CanRead) throw new IOException();
 
                 // Define a buffer to use
                 var buffer = new byte[Client.ReceiveBufferSize];
 
                 // We are using a memory stream to take in data.
                 // ToDo: This is not to be used for files.  We still need to write something for that.
-                using (var ms = new MemoryStream())
+                await using var ms = new MemoryStream();
+
+                // Read and loop while there is data available
+                do
                 {
-                    // Loop while there is data available
-                    do
-                    {
-                        // Read from the socket asynchronously.
-                        // This returns when there's data available to read
-                        int read = await NetworkStream.ReadAsync(buffer, 0, buffer.Length, token);
+                    // Read from the socket asynchronously.
+                    // This returns when there's data available to read
+                    var read = await NetworkStream.ReadAsync(buffer.AsMemory(0, buffer.Length), token);
 
-                        // If there's data, write it to the memory stream.
-                        // If there's no data, it shouldn't return.  Throw an exception.
-                        if (read > 0)
-                        {
-                            ms.Write(buffer, 0, read);
-                        }
-                        else
-                        {
-                            throw new SocketException();
-                        }
-                    } while (NetworkStream.DataAvailable);
+                    // If there's data, write it to the memory stream.
+                    // If there's no data, it shouldn't return.  Throw an exception.
+                    if (read > 0) ms.Write(buffer, 0, read); else throw new SocketException();
+                } while (NetworkStream.DataAvailable);
 
-                    // Return the data we received
-                    return ms.ToArray();
-                }
+                // Return the data we received
+                return ms.ToArray();
             }
             catch (TaskCanceledException)
             {

@@ -1,16 +1,16 @@
-﻿using System;
-using System.Diagnostics.CodeAnalysis;
-
-namespace GlassTL.Telegram
+﻿namespace GlassTL.EventArgs
 {
+    using System;
+
     public class DataReceivedEventArgs : EventArgs
     {
-        [SuppressMessage("Performance", "CA1819:Properties should not return arrays", Justification = "It's fine...")]
-        public byte[] Data { get; } = null;
+        private readonly byte[] _data;
+
+        public byte[] GetData() => (byte[]) _data.Clone();
 
         public DataReceivedEventArgs(byte[] data)
         {
-            Data = data;
+            _data = data;
         }
     }
 }

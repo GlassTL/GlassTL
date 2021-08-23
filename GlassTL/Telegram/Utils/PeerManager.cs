@@ -10,17 +10,21 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace GlassTL.Telegram.Utils
 {
+    #nullable enable
+
     public struct PeerInfo
     {
         private JToken RawPeer { get; set; }
-        public string Type => RawPeer.Value<string?>("_") ?? default;
-        public int ID => RawPeer.Value<int?>("id") ?? default;
+        public string Type => RawPeer.Value<string?>("_") ?? string.Empty;
+        public long ID => RawPeer.Value<long?>("id") ?? default;
         public long AccessHash => RawPeer.Value<long?>("access_hash") ?? default;
         public bool Min => RawPeer.Value<bool?>("min") ?? default;
-        public string FirstName => RawPeer.Value<string?>("first_name") ?? default;
-        public string LastName => RawPeer.Value<string?>("last_name") ?? default;
+        public string FirstName => RawPeer.Value<string?>("first_name") ?? string.Empty;
+        public string LastName => RawPeer.Value<string?>("last_name") ?? string.Empty;
         public string FullName => $"{FirstName} {LastName}".Trim();
-        public string Title => RawPeer.Value<string?>("title") ?? default;
+        public string Title => RawPeer.Value<string?>("title") ?? string.Empty;
+
+        public string Handle => RawPeer.Value<string?>("username") ?? string.Empty;
 
         public PeerInfo(JToken RawPeer)
         {
@@ -95,12 +99,12 @@ namespace GlassTL.Telegram.Utils
         {
             if (message == null) return;
 
-            if (message["users"] != null && message["users"].Type == JTokenType.Array)
+            if (message["users"] != null && message["users"].InternalType == JTokenType.Array)
             {
                 ((JArray)message["users"]).ToList().ForEach(x => AddOrUpdatePeer(x));
             }
 
-            if (message["chats"] != null && message["chats"].Type == JTokenType.Array)
+            if (message["chats"] != null && message["chats"].InternalType == JTokenType.Array)
             {
                 ((JArray)message["chats"]).ToList().ForEach(x => AddOrUpdatePeer(x));
             }
@@ -133,9 +137,17 @@ namespace GlassTL.Telegram.Utils
             peers.ToList().ForEach(x => AddOrUpdatePeer(x.AsTLObject()));
         }
 
-        public PeerInfo? GetPeer(int ID)
+        public PeerInfo? GetPeer(long ID)
         {
             var itemIndex = Peers.FindIndex(x => x.ID == ID);
+
+            if (itemIndex != -1 && Peers[itemIndex].AccessHash != 0) return Peers[itemIndex];
+
+            return null;
+        }
+        public PeerInfo? GetPeer(string Name)
+        {
+            var itemIndex = Peers.FindIndex(x => x.Handle?.ToLower() == Name.ToLower() || x.FullName?.ToLower() == Name.ToLower());
 
             if (itemIndex != -1 && Peers[itemIndex].AccessHash != 0) return Peers[itemIndex];
 
@@ -172,7 +184,19 @@ namespace GlassTL.Telegram.Utils
         /// <param name="reader">The stream containing the raw PeerManager data</param>
         public static PeerInfo[] Deserialize(BinaryReader reader)
         {
-            return Enumerable.Range(0, IntegerUtil.Deserialize(reader))
+            var start = reader.BaseStream.Position;
+
+            var count = IntegerUtil.Deserialize(reader);
+            var collection = new List<PeerInfo>();
+
+            for (var I = 0; I < count; I++)
+            {
+                collection.Add(new PeerInfo(TLObject.Deserialize(reader)));
+            }
+
+            return collection.ToArray();
+
+            return Enumerable.Range(0, count)
                 .Select(x => new PeerInfo(TLObject.Deserialize(reader)))
                 .ToArray();
         }

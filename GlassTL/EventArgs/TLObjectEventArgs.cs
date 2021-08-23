@@ -1,15 +1,15 @@
-﻿using System;
-using GlassTL.Telegram.MTProto;
-
-namespace GlassTL.Telegram
+﻿namespace GlassTL.EventArgs
 {
+    using System;
+    using Telegram.MTProto;
+
     public class TLObjectEventArgs : EventArgs
     {
-        public TLObject TLObject { get; } = null;
+        public TLObject TLObject { get; }
 
-        public TLObjectEventArgs(TLObject TLObject)
+        public TLObjectEventArgs(TLObject tlObject)
         {
-            this.TLObject = TLObject;
+            TLObject = tlObject;
         }
     }
 }

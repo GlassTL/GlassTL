@@ -1,11 +1,13 @@
-﻿using System;
-using System.IO;
-using GlassTL.Telegram.MTProto;
-using GlassTL.Telegram.Utils;
-using System.Threading.Tasks;
-
-namespace GlassTL.Telegram.Network
+﻿namespace GlassTL.Telegram.Network.Senders
 {
+    using System;
+    using System.IO;
+    using MTProto;
+    using Utils;
+    using System.Threading.Tasks;
+    using EventArgs;
+    using Connection;
+
     /// <summary>
     /// MTProto Mobile Protocol plain sender
     /// (https://core.telegram.org/mtproto/description#unencrypted-messages)
@@ -29,7 +31,7 @@ namespace GlassTL.Telegram.Network
         /// <summary>
         /// Gets the underlying connection used by this sender
         /// </summary>
-        public Connection Connection { get; private set; } = null;
+        public SocketConnection Connection { get; private set; } = null;
         #endregion
 
         #region Private-Members
@@ -48,27 +50,25 @@ namespace GlassTL.Telegram.Network
             try
             {
                 // Attempt to handle the data correctly
-                using (var memoryStream = new MemoryStream(e.Data))
-                using (var binaryReader = new BinaryReader(memoryStream))
-                {
-                    if (memoryStream.Capacity < 8) throw new Exception("The data received from the server is not valid.  Skipping...");
+                using var memoryStream = new MemoryStream(e.GetData());
+                using var binaryReader = new BinaryReader(memoryStream);
 
-                    var authKeyId = binaryReader.ReadInt64();
-                    if (authKeyId != 0) throw new Exception($"The value \"{authKeyId}\" is not a valid {nameof(authKeyId)}. Expected \"0\".  Skipping...");
+                if (memoryStream.Capacity < 8) throw new Exception("The data received from the server is not valid.  Skipping...");
 
-                    var messageId = binaryReader.ReadInt64();
-                    if (messageId <= 0) throw new Exception($"The value \"{messageId}\" is not a valid {nameof(messageId)}. Expected positive, non-zero value.  Skipping...");
+                var authKeyId = binaryReader.ReadInt64();
+                if (authKeyId != 0) throw new Exception($"The value \"{authKeyId}\" is not a valid {nameof(authKeyId)}. Expected \"0\".  Skipping...");
 
-                    var messageLength = binaryReader.ReadInt32();
-                    if (messageLength <= 0) throw new Exception($"The value \"{messageLength}\" is not a valid {nameof(messageLength)}. Expected positive, non-zero value.  Skipping...");
+                var messageId = binaryReader.ReadInt64();
+                if (messageId <= 0) throw new Exception($"The value \"{messageId}\" is not a valid {nameof(messageId)}. Expected positive, non-zero value.  Skipping...");
 
-                    var TLObject = new TLObject(binaryReader)
-                        ?? throw new Exception("Unable to parse the data as a valid TLObject.  Skipping...");
+                var messageLength = binaryReader.ReadInt32();
+                if (messageLength <= 0) throw new Exception($"The value \"{messageLength}\" is not a valid {nameof(messageLength)}. Expected positive, non-zero value.  Skipping...");
 
-                    // Raise the event
-                    var args = new object[] { sender, new TLObjectEventArgs(TLObject) };
-                    TLObjectReceivedEvent.RaiseEventSafe(ref args);
-                }
+                var tlObject = new TLObject(binaryReader)
+                    ?? throw new Exception("Unable to parse the data as a valid TLObject.  Skipping...");
+
+                // Raise the event
+                TLObjectReceivedEvent.RaiseEventSafe(sender, new TLObjectEventArgs(tlObject));
             }
             catch (Exception ex)
             {
@@ -81,8 +81,7 @@ namespace GlassTL.Telegram.Network
         private void Connection_DisconnectedEvent(object sender, EventArgs e)
         {
             // Just pass on the event along
-            var args = new object[] { sender, e };
-            DisconnectedEvent.RaiseEventSafe(ref args);
+            DisconnectedEvent.RaiseEventSafe(sender, e);
         }
         /// <summary>
         /// Raised by the underlying <see cref="Connection"/> when a connection is established
@@ -90,8 +89,7 @@ namespace GlassTL.Telegram.Network
         private void Connection_ConnectedEvent(object sender, EventArgs e)
         {
             // Just pass on the event along
-            var args = new object[] { sender, e };
-            ConnectedEvent.RaiseEventSafe(ref args);
+            ConnectedEvent.RaiseEventSafe(sender, e);
         }
         #endregion
 
@@ -100,7 +98,7 @@ namespace GlassTL.Telegram.Network
         /// Initializes the MTProto plain sender.
         /// </summary>
         /// <param name="connection">The Connection to be used.</param>
-        public MTProtoPlainSender(Connection connection)
+        public MTProtoPlainSender(SocketConnection connection)
         {
             // Cannot have a null value as a connection
             Connection = connection ?? throw new ArgumentNullException(nameof(connection));
@@ -125,16 +123,19 @@ namespace GlassTL.Telegram.Network
             // Get the byte representation of the TLObject
             var request = TLObject.Serialize();
 
-            using (var memoryStream = new MemoryStream(8 + 8 + 4 + request.Length))
-            using (var binaryWriter = new BinaryWriter(memoryStream))
-            {
-                binaryWriter.Write(0L);
-                binaryWriter.Write(State.GetNewMessageID());
-                binaryWriter.Write(request.Length);
-                binaryWriter.Write(request);
+            using var memoryStream = new MemoryStream(8 + 8 + 4 + request.Length);
+            using var binaryWriter = new BinaryWriter(memoryStream);
 
-                await Connection.Send(memoryStream.ToArray());
-            }
+            // auth_key_id = 0 (64 bits) which means that there is no auth_key
+            binaryWriter.Write(0L);
+            // message_id
+            binaryWriter.Write(State.GetNewMessageID());
+            // message_data_length
+            binaryWriter.Write(request.Length);
+            // message_data
+            binaryWriter.Write(request);
+
+            await Connection.Send(memoryStream.ToArray());
         }
 
         /// <summary>

@@ -1,9 +1,9 @@
-﻿using System.Collections.Generic;
-using System.Linq;
-
-namespace GlassTL.Telegram.Utils
+﻿namespace GlassTL.Telegram.Utils
 {
-    class ConcurrentCircularBuffer<T>
+    using System.Collections.Generic;
+    using System.Linq;
+
+    public class ConcurrentCircularBuffer<T>
     {
         private readonly LinkedList<T> _buffer;
         private readonly int _maxItemCount;
@@ -25,7 +25,7 @@ namespace GlassTL.Telegram.Utils
                 }
             }
         }
-        public void PutRange(T[] items)
+        public void PutRange(IEnumerable<T> items)
         {
             lock (_buffer)
             {

@@ -1,48 +1,45 @@
-﻿using System;
-using System.IO;
-using System.Linq;
-using System.Security.Cryptography;
-
-namespace GlassTL.Telegram.MTProto.Crypto
+﻿namespace GlassTL.Telegram.MTProto.Crypto
 {
+    using System;
+    using System.Security.Cryptography;
+
     public class AuthKey
     {
+        private readonly byte[] _key;
+
         public AuthKey(BigInteger gab) : this(gab.ToByteArrayUnsigned()) { }
 
         public AuthKey(byte[] data)
         {
-            Key = data;
+            _key = data;
 
-            using var hash = new SHA1Managed();
-            using var hashStream = new MemoryStream(hash.ComputeHash(Key), false);
-            using var hashReader = new BinaryReader(hashStream);
+            using var sha1 = new SHA1Managed();
+            var hash = sha1.ComputeHash(data);
 
-            AuxHash = hashReader.ReadUInt64();
-            hashReader.ReadBytes(4);
-            KeyID = hashReader.ReadUInt64();
+            AuxHash = BitConverter.ToUInt64(hash, 0);
+            KeyId   = BitConverter.ToUInt64(hash, 12);
         }
 
         public byte[] CalcNewNonceHash(byte[] newNonce, int number)
         {
             using var sha = SHA1.Create();
 
-            return sha.ComputeHash(
-                newNonce
-                .Concat(new byte[] { (byte)number })
-                .Concat(BitConverter.GetBytes(AuxHash))
-                .ToArray()
-                ).Skip(4).Take(16).ToArray();
+            var nonce = new byte[newNonce.Length + 1 + 8];
+            Buffer.BlockCopy(newNonce, 0, nonce, 0, newNonce.Length);
+            nonce[newNonce.Length] = (byte)number;
+            Buffer.BlockCopy(BitConverter.GetBytes(AuxHash), 0, nonce, newNonce.Length + 1, 8);
+
+            var hash = new byte[16];
+            Buffer.BlockCopy(sha.ComputeHash(nonce), 4, hash, 0, 16);
+
+            return hash;
         }
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1819:Properties should not return arrays", Justification = "<Pending>")]
-        public byte[] Key { get; }
+        public byte[] GetKey() => (byte[]) _key.Clone();
 
-        public ulong KeyID { get; }
-        public ulong AuxHash { get; set; }
+        public ulong KeyId { get; }
+        private ulong AuxHash { get; }
 
-        public override string ToString()
-        {
-            return string.Format("(Key: {0}, KeyId: {1}, AuxHash: {2})", Key, KeyID, AuxHash);
-        }
+        public override string ToString() => $"(Key: {_key}, KeyId: {KeyId}, AuxHash: {AuxHash})";
     }
 }

@@ -10,6 +10,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GlassTL.Examples", "GlassTL
 		{43091439-79B3-40E6-97FF-ADF2DC0815BD} = {43091439-79B3-40E6-97FF-ADF2DC0815BD}
 	EndProjectSection
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GlassTL.GlassConsole", "GlassConsole\GlassTL.GlassConsole.csproj", "{72309127-47F9-4B7F-962C-73A128CE52DC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,6 +26,10 @@ Global
 		{0E462BF4-6183-4EE1-B79C-C8FCE26452AD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0E462BF4-6183-4EE1-B79C-C8FCE26452AD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0E462BF4-6183-4EE1-B79C-C8FCE26452AD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{72309127-47F9-4B7F-962C-73A128CE52DC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{72309127-47F9-4B7F-962C-73A128CE52DC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{72309127-47F9-4B7F-962C-73A128CE52DC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{72309127-47F9-4B7F-962C-73A128CE52DC}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

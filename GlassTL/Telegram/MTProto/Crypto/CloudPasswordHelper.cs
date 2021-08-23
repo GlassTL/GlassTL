@@ -1,40 +1,18 @@
-﻿using System;
-using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
-using Newtonsoft.Json.Linq;
-using GlassTL.Telegram.Utils;
-
-namespace GlassTL.Telegram.MTProto.Crypto
+﻿namespace GlassTL.Telegram.MTProto.Crypto
 {
+    using System;
+    using System.Security;
+    using System.Security.Cryptography;
+    using Utils;
+
     public static class CloudPasswordHelper
     {
         /// <summary>
         /// All operations use 256-bit hashes
         /// </summary>
-        private const int kSizeForHash = 256;
+        private const int KSizeForHash = 256;
 
-        private static readonly dynamic schema = new TLSchema();
-
-        /// <summary>
-        /// Pads a byte array to a fixed length or returns the array if already the correct size or larger
-        /// </summary>
-        /// <param name="buffer">The byte array to pad</param>
-        private static byte[] NumBytesForHash(byte[] buffer)
-        {
-            // Determine how many padding bytes we need
-            var fill = kSizeForHash - buffer.Length;
-
-            // If we don't need any padding, just return the array
-            if (fill <= 0) return (byte[])buffer.Clone();
-
-            // Create a new array of the correct size
-            var result = new byte[kSizeForHash];
-            // Copy the buffer into the new array at the correct index
-            Buffer.BlockCopy(buffer, 0, result, fill, buffer.Length);
-
-            return result;
-        }
+        private static readonly dynamic Schema = new TLSchema();
 
         /// <summary>
         /// Hashes bytes using the SHA-256 hashing method
@@ -54,16 +32,10 @@ namespace GlassTL.Telegram.MTProto.Crypto
         private static byte[] Xor(byte[] a, byte[] b)
         {
             // We only support blocks of the same length.
-            if (a.Length != b.Length)
-            {
-                throw new ArgumentException($"Cannot Xor two blocks of unequal length.");
-            }
+            if (a.Length != b.Length) throw new ArgumentException($"Cannot Xor two blocks of unequal length.");
 
             // Loop through and xor the bytes
-            for (var i = 0; i < b.Length; i++)
-            {
-                a[i] ^= b[i];
-            }
+            for (var i = 0; i < b.Length; i++) a[i] ^= b[i];
 
             return a;
         }
@@ -78,6 +50,7 @@ namespace GlassTL.Telegram.MTProto.Crypto
             // Use built-in implementation.
             // Note:  There's no point to outputting more bits than the base hash function size.
             // SHA-512 => 512 bits (64 bytes)
+            // ToDo: Explore other ways of doing this because it is horrendously slow...
             using var deriveBytes = new Rfc2898DeriveBytes(password, salt, iterations, HashAlgorithmName.SHA512);
             return deriveBytes.GetBytes(64);
         }
@@ -89,7 +62,7 @@ namespace GlassTL.Telegram.MTProto.Crypto
         /// </summary>
         /// <param name="algo">The TLObject from account.getPassword["current_algo"]</param>
         /// <param name="password">The cloud password that the user provided</param>
-        public static byte[] PasswordHash(TLObject algo, string password)
+        private static byte[] PasswordHash(TLObject algo, SecureString password)
         {
             // Given the following:
             //  H(data) = SHA256(data)
@@ -97,19 +70,19 @@ namespace GlassTL.Telegram.MTProto.Crypto
             //  PH1(password, salt1, salt2) = SH(SH(password, salt1), salt2)
             //  PH2(password, salt1, salt2) = SH(pbkd2(sha512, PH1(password, salt1, salt2), salt1, 100000), salt2)
 
-            var PH1 = Sha256(
-                (byte[])algo["salt2"],
-                Sha256((byte[])algo["salt1"], Encoding.UTF8.GetBytes(password), (byte[])algo["salt1"]),
-                (byte[])algo["salt2"]
+            var ph1 = Sha256(
+                algo["salt2"],
+                password.Process(unsafePassword => Sha256(algo["salt1"], unsafePassword, algo["salt1"])),
+                algo["salt2"]
             );
 
-            var PH2 = Sha256(
-                (byte[])algo["salt2"],
-                Pbkdf2Sha512(PH1, (byte[])algo["salt1"], 100000),
-                (byte[])algo["salt2"]
+            var ph2 = Sha256(
+                algo["salt2"],
+                Pbkdf2Sha512(ph1, algo["salt1"], 100000),
+               algo["salt2"]
             );
 
-            return PH2;
+            return ph2;
         }
         /// <summary>
         /// Computes v based on the following:
@@ -118,13 +91,13 @@ namespace GlassTL.Telegram.MTProto.Crypto
         /// </summary>
         /// <param name="algo">The TLObject from account.getPassword["current_algo"]</param>
         /// <param name="password">The cloud password that the user provided</param>
-        public static byte[] DigestPasswordHash(TLObject algo, string password)
+        public static byte[] DigestPasswordHash(TLObject algo, SecureString password)
         {
             var g = new BigInteger(algo["g"].ToString());
-            var PH2 = new BigInteger(1, PasswordHash(algo, password));
-            var p = new BigInteger(1, (byte[])algo["p"]);
+            var ph2 = new BigInteger(1, PasswordHash(algo, password));
+            var p = new BigInteger(1, algo["p"]);
 
-            return NumBytesForHash(g.ModPow(PH2, p).ToByteArrayUnsigned());
+            return g.ModPow(ph2, p).ToByteArrayUnsigned().PadByteArray(KSizeForHash);
         }
 
         /// <summary>
@@ -134,10 +107,10 @@ namespace GlassTL.Telegram.MTProto.Crypto
         /// g_a = pow(g, a) mod p
         /// u = H(g_a | g_b)
         /// </summary>
-        /// <param name="g">The <see cref="BigInteger"> from account.getPassword["current_algo"]["g"]</param>
-        /// <param name="p">The <see cref="BigInteger"> from account.getPassword["current_algo"]["p"]</param>
-        /// <param name="srp_B">The byte data from account.getPassword["srp_B"]</param>
-        private static Tuple<BigInteger, byte[], BigInteger> GenerateAndCheckRandom(BigInteger g, BigInteger p, byte[] srp_B)
+        /// <param name="g">The <see cref="BigInteger"/> from account.getPassword["current_algo"]["g"]</param>
+        /// <param name="p">The <see cref="BigInteger"/> from account.getPassword["current_algo"]["p"]></param>
+        /// <param name="srpB">The byte data from account.getPassword["srp_B"]</param>
+        private static (BigInteger, byte[], BigInteger) GenerateAndCheckRandom(BigInteger g, BigInteger p, byte[] srpB)
         {
             // Loop until we have valid info
             while (true)
@@ -146,26 +119,26 @@ namespace GlassTL.Telegram.MTProto.Crypto
                 var a = new BigInteger(1, Helpers.GenerateRandomBytes(2048 / 8));
 
                 // g_a = pow(g, a) mod p
-                var g_a = g.ModPow(a, p);
+                var gA = g.ModPow(a, p);
 
                 // Validate the info
-                if (!IsGoodModExpFirst(g_a, p)) continue;
+                if (!IsGoodModExpFirst(gA, p)) continue;
 
                 // We need the byte data anyway
-                var GAForHash = NumBytesForHash(g_a.ToByteArrayUnsigned());
+                var gaForHash = gA.ToByteArrayUnsigned().PadByteArray(KSizeForHash);
                 // u = H(g_a | g_b)
-                var u = new BigInteger(1, Sha256(GAForHash, srp_B));
+                var u = new BigInteger(1, Sha256(gaForHash, srpB));
 
                 // u will always be positive
 
-                return new Tuple<BigInteger, byte[], BigInteger>(a, GAForHash, u);
+                return (a, gaForHash, u);
             }
         }
 
         // Validate Primes.  This needs to be reviewed...
         private static bool IsPrimeAndGood(byte[] primeBytes, int g)
         {
-            var GoodPrime = new byte[] {
+            var goodPrime = new byte[] {
                 0xC7, 0x1C, 0xAE, 0xB9, 0xC6, 0xB1, 0xC9, 0x04, 0x8E, 0x6C, 0x52, 0x2F, 0x70, 0xF1, 0x3F, 0x73,
                 0x98, 0x0D, 0x40, 0x23, 0x8E, 0x3E, 0x21, 0xC1, 0x49, 0x34, 0xD0, 0x37, 0x56, 0x3D, 0x93, 0x0F,
                 0x48, 0x19, 0x8A, 0x0A, 0xA7, 0xC1, 0x40, 0x58, 0x22, 0x94, 0x93, 0xD2, 0x25, 0x30, 0xF4, 0xDB,
@@ -184,20 +157,13 @@ namespace GlassTL.Telegram.MTProto.Crypto
                 0x6F, 0x4F, 0xAD, 0xF0, 0x34, 0xB1, 0x04, 0x03, 0x11, 0x9C, 0xD8, 0xE3, 0xB9, 0x2F, 0xCC, 0x5B
             };
 
-            if (!GoodPrime.SequenceEqual(primeBytes))
-            {
-                if (g == 3 || g == 4 || g == 5 || g == 7)
-                {
-                    return true;
-                }
-            }
-
-            return IsPrimeAndGoodCheck(new BigInteger(1, primeBytes), g);
+            if (goodPrime.DirectSequenceEquals(primeBytes)) return IsPrimeAndGoodCheck(new BigInteger(1, primeBytes), g);
+            return g is 3 or 4 or 5 or 7 || IsPrimeAndGoodCheck(new BigInteger(1, primeBytes), g);
         }
         // Validate Primes.  This needs to be reviewed...
         private static bool IsPrimeAndGoodCheck(BigInteger prime, int g)
         {
-            var kGoodPrimeBitsCount = 2048;
+            const int kGoodPrimeBitsCount = 2048;
 
             if (prime < 0 || prime.BitLength != kGoodPrimeBitsCount)
             {
@@ -270,20 +236,13 @@ namespace GlassTL.Telegram.MTProto.Crypto
         private static bool IsGoodModExpFirst(BigInteger modexp, BigInteger prime)
         {
             var diff = prime - modexp;
-            var kMinDiffBitsCount = 2048 - 64;
+            const int kMinDiffBitsCount = 2048 - 64;
 
-            if (diff < 0
-                || diff.BitLength < kMinDiffBitsCount
-                || modexp.BitLength < kMinDiffBitsCount
-                || modexp.BitLength / 8 > kSizeForHash)
-            {
-                return false;
-            }
-            return true;
+            return diff >= 0 && diff.BitLength >= kMinDiffBitsCount && modexp.BitLength >= kMinDiffBitsCount && modexp.BitLength / 8 <= KSizeForHash;
         }
 
         /// <summary>
-        /// Determines whether or not a <see cref="BigInteger"> is positive
+        /// Determines whether or not a <see cref="BigInteger" /> is positive
         /// </summary>
         /// <param name="number">Number to analyze</param>
         private static bool IsPositive(BigInteger number)
@@ -292,7 +251,7 @@ namespace GlassTL.Telegram.MTProto.Crypto
         }
 
         /// <summary>
-        /// Determines whether or not a <see cref="BigInteger"> is positive and smaller than a cap
+        /// Determines whether or not a <see cref="BigInteger" /> is positive and smaller than a cap
         /// </summary>
         /// <param name="number">Number to analyze</param>
         /// <param name="p">The cap for our number</param>
@@ -304,64 +263,53 @@ namespace GlassTL.Telegram.MTProto.Crypto
         /// <summary>
         /// Builds an `inputCheckPasswordSRP` object when provided with the results from
         /// `account.getPassword` and the user's cloud password
-        ///
-        /// ToDo: Convert to SecurePassword object
         /// </summary>
         /// <param name="request">The results from `account.getPassword`</param>
         /// <param name="password">The 2FA password from the user</param>
-        public static TLObject ComputePasswordCheck(TLObject request, string password)
+        public static TLObject ComputePasswordCheck(TLObject request, SecureString password)
         {
             var algo = new TLObject(request["current_algo"]);
-            var pw_hash = PasswordHash(algo, password);
+            var pwHash = PasswordHash(algo, password);
 
-            if ((string)algo["_"] != "passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow")
+            if (algo["_"] != "passwordKdfAlgoSHA256SHA256PBKDF2HMACSHA512iter100000SHA256ModPow")
             {
                 throw new Exception($"Password algorithm not supported: {(string)algo["_"]}");
             }
 
-            var p = new BigInteger(1, (byte[])algo["p"]);
+            var p = new BigInteger(1, algo["p"]);
             var g = new BigInteger(algo["g"].ToString());
-            var B = new BigInteger(1, (byte[])request["srp_B"]);
+            var b = new BigInteger(1, request["srp_B"]);
 
-            if (!IsPrimeAndGood((byte[])algo["p"], (int)algo["g"]))
-            {
-                throw new Exception($"Bad or unsupported p_g");
-            }
-            else if (!IsGoodLarge(B, p))
-            {
-                throw new Exception($"Bad or unsupported B");
-            }
+            if (!IsPrimeAndGood(algo["p"], (int)algo["g"])) throw new Exception($"Bad or unsupported p_g");
+            if (!IsGoodLarge(b, p))  throw new Exception($"Bad or unsupported B");
 
-            var x = new BigInteger(1, pw_hash);
-            var pForHash = NumBytesForHash((byte[])algo["p"]);
-            var gForHash = NumBytesForHash(g.ToByteArrayUnsigned());
-            var BForHash = NumBytesForHash((byte[])request["srp_B"]);
-            var kg_x = new BigInteger(1, Sha256(pForHash, gForHash)) * g.ModPow(x, p) % p;
+            var x = new BigInteger(1, pwHash);
+            var pForHash = ((byte[])algo["p"]).PadByteArray(KSizeForHash);
+            var gForHash = g.ToByteArrayUnsigned().PadByteArray(KSizeForHash);
+            var bForHash = ((byte[])request["srp_B"]).PadByteArray(KSizeForHash);
+            var kgX = new BigInteger(1, Sha256(pForHash, gForHash)) * g.ModPow(x, p) % p;
 
-            (var a, var GAForHash, var u) = GenerateAndCheckRandom(g, p, BForHash);
+            var (a, gaForHash, u) = GenerateAndCheckRandom(g, p, bForHash);
 
-            var g_b = B - kg_x % p;
+            var gB = b - kgX % p;
 
-            if (!IsGoodModExpFirst(g_b, p))
-            {
-                throw new Exception($"Bad or unsupported g_b");
-            }
+            if (!IsGoodModExpFirst(gB, p)) throw new Exception($"Bad or unsupported g_b");
 
-            var K = Sha256(g_b.ModPow(a + u * x, p).ToByteArrayUnsigned());
-            var M1 = Sha256(
+            var k = Sha256(gB.ModPow(a + u * x, p).ToByteArrayUnsigned());
+            var m1 = Sha256(
                 Xor(Sha256(pForHash), Sha256(gForHash)),
-                Sha256((byte[])algo["salt1"]),
-                Sha256((byte[])algo["salt2"]),
-                GAForHash,
-                BForHash,
-                K
+                Sha256(algo["salt1"]),
+                Sha256(algo["salt2"]),
+                gaForHash,
+                bForHash,
+                k
             );
 
-            return schema.inputCheckPasswordSRP(new
+            return Schema.inputCheckPasswordSRP(new
             {
                 srp_id = request["srp_id"],
-                A = GAForHash,
-                M1
+                A      = gaForHash,
+                M1     = m1
             });
         }
     }

@@ -1,23 +1,27 @@
-﻿using System;
-using System.Runtime.Serialization;
-
-namespace GlassTL.Telegram.Exceptions
+﻿namespace GlassTL.Exceptions
 {
+    using System;
+    using System.Runtime.Serialization;
+
     /// <summary>
     /// Occurs when the server has flood waited requests for a period of time.
     /// </summary>
     [Serializable]
-    public class FloodWaitException : Exception, ISerializable
+    public class FloodWaitException : Exception
     {
+        /// <summary>
+        /// The number of seconds to wait before resending the request
+        /// </summary>
         public int FloodWaitSeconds { get; private set; }
-        public FloodWaitException(int FloodWaitSeconds) : base($"Flood waited for {FloodWaitSeconds} seconds.")
+
+        public FloodWaitException(int floodWaitSeconds) : base($"Flood waited for {floodWaitSeconds} seconds.")
         {
-            this.FloodWaitSeconds = FloodWaitSeconds;
+            FloodWaitSeconds = floodWaitSeconds;
         }
 
-        public FloodWaitException(int FloodWaitSeconds, Exception innerException) : base($"Flood waited for {FloodWaitSeconds} seconds.", innerException)
+        public FloodWaitException(int floodWaitSeconds, Exception innerException) : base($"Flood waited for {floodWaitSeconds} seconds.", innerException)
         {
-            this.FloodWaitSeconds = FloodWaitSeconds;
+            FloodWaitSeconds = floodWaitSeconds;
         }
 
         public FloodWaitException() { }

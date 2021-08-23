@@ -66,35 +66,23 @@ namespace GlassTL.Telegram
             using var memory = new MemoryStream();
             using var writer = new BinaryWriter(memory);
 
-            if (Helper == null)
+            BoolUtil.Serialize(Helper != null, writer);
+            if (Helper != null)
             {
-                BoolUtil.Serialize(false, writer);
-            }
-            else
-            {
-                BoolUtil.Serialize(true, writer);
                 BytesUtil.Serialize(Helper.Serialize(), writer);
             }
 
-            if (TLUser == null)
+            BoolUtil.Serialize(TLUser != null, writer);
+            if (TLUser != null)
             {
-                BoolUtil.Serialize(false, writer);
-            }
-            else
-            {
-                BoolUtil.Serialize(true, writer);
                 TLUser.Serialize(writer);
             }
 
             IntegerUtil.Serialize(SessionExpires, writer);
 
-            if (DataCenter == null)
+            BoolUtil.Serialize(DataCenter != null, writer);
+            if (DataCenter != null)
             {
-                BoolUtil.Serialize(false, writer);
-            }
-            else
-            {
-                BoolUtil.Serialize(true, writer);
                 BytesUtil.Serialize(DataCenter.Serialize(), writer);
             }
             
@@ -120,7 +108,7 @@ namespace GlassTL.Telegram
         /// <param name="reader">The stream containing the raw Session data</param>
         public static Session Deserialize(string FileName, BinaryReader reader)
         {
-            Network.MTProtoHelper Helper = null;
+            MTProtoHelper Helper = null;
 
             if (BoolUtil.Deserialize(reader))
             {
@@ -152,7 +140,7 @@ namespace GlassTL.Telegram
             };
 
             PeerManager
-                .Deserialize(reader).ToList()
+                .Deserialize(BytesUtil.Deserialize(reader)).ToList()
                 .ForEach(x => session.KnownPeers.AddOrUpdatePeer(x.AsTLObject()));
 
             return session;

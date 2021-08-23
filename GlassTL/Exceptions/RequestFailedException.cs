@@ -1,27 +1,27 @@
-﻿using System;
-using System.Runtime.Serialization;
-using GlassTL.Telegram.MTProto;
-
-namespace GlassTL.Telegram.Exceptions
+﻿namespace GlassTL.Exceptions
 {
+    using System;
+    using System.Runtime.Serialization;
+    using Telegram.MTProto;
+
     /// <summary>
-    /// Occurs when an sending a request to Telegram fails.  See InnerException for more details
+    /// Occurs when sending a request to Telegram fails.  The InnerException my shed some more light on the matter.
     /// </summary>
     [Serializable]
-    class RequestFailedException : Exception, ISerializable
+    public class RequestFailedException : Exception
     {
         public TLObject Request { get; }
 
         public RequestFailedException(string message) : base(message) { }
         public RequestFailedException(string message, Exception innerException) : base(message, innerException) { }
 
-        public RequestFailedException(string message, TLObject Request) : base(message)
+        public RequestFailedException(string message, TLObject request) : base(message)
         {
-            this.Request = Request;
+            Request = request;
         }
-        public RequestFailedException(string message, Exception innerException, TLObject Request) : base(message, innerException)
+        public RequestFailedException(string message, Exception innerException, TLObject request) : base(message, innerException)
         {
-            this.Request = Request;
+            Request = request;
         }
 
         public RequestFailedException() { }

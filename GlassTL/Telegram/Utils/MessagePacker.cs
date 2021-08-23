@@ -142,7 +142,7 @@ namespace GlassTL.Telegram.Extensions
                 Logger.Log(Logger.Level.Debug, $"Attempting to package {Batch.Count} requests into one container");
 
                 // Manually create a container since it's not included in the schema
-                var msg_container = ManualTypes.CreateTypeSerialized(ManualTypes.Constructors.msg_container, JArray.FromObject(RawPackedData));
+                var msg_container = ManualTypes.CreateMessageContainer(RawPackedData.ToArray());
                 // Serialize the container like we did above.  This will be the container id
                 var container_id = _State.WriteDataAsMessage(msg_container, out byte[] serialized, false);
                 // Repackage all the data into one

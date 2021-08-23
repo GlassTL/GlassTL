@@ -1,15 +1,14 @@
-
-using System.IO;
-
 namespace GlassTL.Telegram
 {
+    using System.IO;
+
     public class DataCenter
     {
         public DataCenter(string address, int port, bool testDC, int dcId)
         {
-            Address = address;
-            Port = port;
-            TestDC = testDC;
+            Address      = address;
+            Port         = port;
+            TestDC       = testDC;
             DataCenterId = dcId;
         }
 

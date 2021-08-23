@@ -1,28 +1,16 @@
-﻿using System;
-using System.Net;
-using System.Net.Sockets;
-using System.Threading.Tasks;
-using GlassTL.Telegram.Utils;
-
-namespace GlassTL.Telegram.Network
+﻿namespace GlassTL.Telegram.Network.Connection
 {
-    public enum Codec
-    {
-        Unkown = -1,
-        /// <summary>
-        /// Default Telegram mode. Sends 12 additional bytes and
-        /// needs to calculate the CRC value of the packet itself.
-        /// </summary>
-        FullPacketCodec
-    }
+    using System;
+    using System.Net;
+    using System.Net.Sockets;
+    using System.Threading.Tasks;
+    using EventArgs;
+    using Utils;
 
     /// <summary>
-    /// The <see cref="Connection"/> class is a wrapper around <see cref="TcpClient"/>.
-    /// Subclasses will implement different transport modes as atomic operations,
-    /// which this class eases doing since the exposed interface simply puts and
-    /// gets complete data payloads to and from queues.
+    /// An abstract class handling generic connections to Telegram
     /// </summary>
-    public abstract class Connection : IDisposable
+    public abstract class SocketConnection : IDisposable
     {
         #region Public-Members
         /// <summary>
@@ -39,18 +27,18 @@ namespace GlassTL.Telegram.Network
         public event EventHandler<DataReceivedEventArgs> DataReceivedEvent;
 
         /// <summary>
-        /// This property should be handled by <see cref="Connection"/> subclasses
+        /// This property should be handled by <see cref="SocketConnection"/> subclasses
         /// </summary>
         public abstract Codec PacketCodec { get; }
 
         /// <summary>
         /// Gets the remote IP
         /// </summary>
-        public string RemoteIP { get; internal set; } = "";
+        public string RemoteIp { get; }
         /// <summary>
         /// Gets the remote port
         /// </summary>
-        public int Port { get; internal set; } = -1;
+        public int Port { get; }
 
         /// <summary>
         /// Gets address information about the connection
@@ -67,13 +55,13 @@ namespace GlassTL.Telegram.Network
         /// <summary>
         /// Gets or sets the socket wrapper for this connection
         /// </summary>
-        internal TcpClient ClientInstance { get; set; }
+        private TcpClient ClientInstance { get; set; }
 
         /// <summary>
         /// Gets or sets a value indicating if the connection is already
         /// in the process of being disposed
         /// </summary>
-        private bool Disposing { get; set; } = false; // To detect redundant calls
+        private bool Disposing { get; set; } // To detect redundant calls
         #endregion
 
         #region Constructors-and-Factories
@@ -82,29 +70,23 @@ namespace GlassTL.Telegram.Network
         /// 
         /// This will not establish the connection, however.
         /// </summary>
-        /// <param name="IP">Indicates the remote IP we are connecting to</param>
-        /// <param name="Port">Indicates the remote Port we are connecting to</param>
-        protected Connection(string IP, int Port)
+        /// <param name="ip">Indicates the remote IP we are connecting to</param>
+        /// <param name="port">Indicates the remote Port we are connecting to</param>
+        protected SocketConnection(string ip, int port)
         {
             Logger.Log(Logger.Level.Debug, "Attempting to create an underlying connection instance");
 
             try
             {
                 // The IP and port must be valid
-                if (string.IsNullOrEmpty(IP))
-                {
-                    throw new ArgumentException("Null values are not supported", nameof(IP));
-                }
-                else if (Port < 0)
-                {
-                    throw new ArgumentException("Negatative values are not supported", nameof(Port));
-                }
+                if (string.IsNullOrEmpty(ip)) throw new ArgumentException("Null values are not supported", nameof(ip));
+                if (port < 0) throw new ArgumentException("Negative values are not supported", nameof(port));
 
                 // Save the information
-                RemoteIP = IP;
-                this.Port = Port;
+                RemoteIp = ip;
+                Port = port;
 
-                Logger.Log(Logger.Level.Debug, "Underlying connection instance initualized");
+                Logger.Log(Logger.Level.Debug, "Underlying connection instance initialized");
             }
             catch (Exception ex)
             {
@@ -118,30 +100,33 @@ namespace GlassTL.Telegram.Network
         /// <summary>
         /// Establishes a connection with the server.
         /// </summary>
-        public void Connect(int ConnectionTimeout)
+        public void Connect(int connectionTimeout)
         {
             Logger.Log(Logger.Level.Info, "Attempting to connect using the underlying connection instance.");
-            Logger.Log(Logger.Level.Debug, $"Timeout: {ConnectionTimeout}");
+            Logger.Log(Logger.Level.Debug, $"Timeout: {connectionTimeout}");
 
             try
             {
                 // Attempt to parse the IP passed
-                if (!IPAddress.TryParse(RemoteIP, out IPAddress Address)) throw new Exception($"Invalid IP Address: {RemoteIP}");
+                if (!IPAddress.TryParse(RemoteIp, out var address)) throw new Exception($"Invalid IP Address: {RemoteIp}");
 
                 // Create a new instance and subscribe to the events
                 ClientInstance = new TcpClient();
 
-                ClientInstance.ConnectedEvent += ClientInstance_ConnectedEvent;
+                ClientInstance.ConnectedEvent    += ClientInstance_ConnectedEvent;
                 ClientInstance.DataReceivedEvent += ClientInstance_DataReceivedEvent;
                 ClientInstance.DisconnectedEvent += ClientInstance_DisconnectedEvent;
 
                 Logger.Log(Logger.Level.Debug, $"Subscribed to events from the socket wrapper");
 
                 // Perform the action connection
-                ClientInstance.Connect(Address, Port, ConnectionTimeout);
+                ClientInstance.Connect(address, Port, connectionTimeout);
 
+                // Allow implementations to init the connection
+                InitConnection(ClientInstance);
+                
                 // Save information about the address
-                Mode = Address.AddressFamily;
+                Mode = address.AddressFamily;
             }
             catch (Exception ex)
             {
@@ -165,7 +150,7 @@ namespace GlassTL.Telegram.Network
 
                 Logger.Log(Logger.Level.Debug, $"\tUnserialized Length: {data.Length}");
 
-                // Using the overridden method (hopefully), serialize
+                // Allow implementations to serialize the data according to the transport specs 
                 var outgoing = SerializePacket(data)
                     ?? throw new Exception("Serializing the packet resulted in a null value.");
 
@@ -184,17 +169,23 @@ namespace GlassTL.Telegram.Network
         }
 
         /// <summary>
-        /// The method should be handled by <see cref="Connection"/> subclasses
+        /// In the case that the connection needs to be initialized by sending data, this
+        /// method allows implementations to be able to do so.
         /// </summary>
-        /// <param name="Packet">The raw packed to serialize</param>
-        /// <returns>The serialized data</returns>
-        public abstract byte[] SerializePacket(byte[] Packet);
+        /// <param name="client">The underlying <see cref="TcpClient"/> which represents the connection</param>
+        protected abstract Task InitConnection(TcpClient client);
         /// <summary>
-        /// The method should be handled by <see cref="Connection"/> subclasses
+        /// The method should be handled by <see cref="SocketConnection"/> subclasses
         /// </summary>
-        /// <param name="Packet">The raw packed to deserialize</param>
+        /// <param name="packet">The raw packed to serialize</param>
+        /// <returns>The serialized data</returns>
+        protected abstract byte[] SerializePacket(byte[] packet);
+        /// <summary>
+        /// The method should be handled by <see cref="SocketConnection"/> subclasses
+        /// </summary>
+        /// <param name="packet">The raw packed to deserialize</param>
         /// <returns>The raw data</returns>
-        public abstract byte[] DeserializePacket(byte[] Packet);
+        protected abstract byte[] DeserializePacket(byte[] packet);
 
         /// <summary>
         /// Disconnects from the server
@@ -207,7 +198,7 @@ namespace GlassTL.Telegram.Network
             ClientInstance.Disconnect();
 
             // Unsubscribe from the events
-            ClientInstance.ConnectedEvent -= ClientInstance_ConnectedEvent;
+            ClientInstance.ConnectedEvent    -= ClientInstance_ConnectedEvent;
             ClientInstance.DataReceivedEvent -= ClientInstance_DataReceivedEvent;
             ClientInstance.DisconnectedEvent -= ClientInstance_DisconnectedEvent;
         }
@@ -217,8 +208,9 @@ namespace GlassTL.Telegram.Network
         /// </summary>
         public void Dispose()
         {
-            // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
+            // Do not change this code. Put cleanup code in Dispose(bool disposing)
             Dispose(true);
+            GC.SuppressFinalize(this);
         }
         #endregion
 
@@ -231,8 +223,7 @@ namespace GlassTL.Telegram.Network
             Logger.Log(Logger.Level.Info, "Disconnection detected.  Passing on...");
 
             // Pass the event on
-            var args = new object[] { sender, EventArgs.Empty };
-            DisconnectedEvent.RaiseEventSafe(ref args);
+            DisconnectedEvent.RaiseEventSafe(sender, EventArgs.Empty);
         }
         /// <summary>
         /// Raised by the socket wrapper when byte data is received from the server
@@ -244,20 +235,19 @@ namespace GlassTL.Telegram.Network
                 Logger.Log(Logger.Level.Info, "A packet was received from the server");
 
                 // Make sure the packet is valid
-                if (e.Data == null || e.Data.Length == 0) throw new Exception("A null packet was received.  Skipping");
+                if (e.GetData() == null || e.GetData().Length == 0) throw new Exception("A null packet was received.  Skipping");
 
-                Logger.Log(Logger.Level.Debug, $"\tSerialized Packet Length: {e.Data.Length}");
+                Logger.Log(Logger.Level.Debug, $"\tSerialized Packet Length: {e.GetData().Length}");
 
                 // Using the overridden method (hopefully), deserialize
-                var deserialized = DeserializePacket(e.Data)
-                    ?? throw new Exception("Deserializing the packet resulted in a null value.  Skipping");
+                var deserialized = DeserializePacket(e.GetData())??
+                    throw new Exception("Deserializing the packet resulted in a null value.  Skipping");
 
                 Logger.Log(Logger.Level.Debug, $"\tDeserialized Packet Length: {deserialized.Length}");
                 Logger.Log(Logger.Level.Debug, $"Raising the {nameof(DataReceivedEvent)} event");
 
                 // Pass the data on
-                var args = new object[] { sender, new DataReceivedEventArgs(deserialized) };
-                DataReceivedEvent.RaiseEventSafe(ref args);
+                DataReceivedEvent.RaiseEventSafe(sender, new DataReceivedEventArgs(deserialized));
             }
             catch (Exception ex)
             {
@@ -273,32 +263,29 @@ namespace GlassTL.Telegram.Network
             Logger.Log(Logger.Level.Info, "Connection to the server made successfully.  Passing on....");
 
             // Pass the event on
-            var args = new object[] { sender, e };
-            ConnectedEvent.RaiseEventSafe(ref args);
+            ConnectedEvent.RaiseEventSafe(sender, e);
         }
 
         /// <summary>
         /// Performs the actual disposing.
         /// </summary>
-        /// <param name="Managed">True if disposing managed resources.  Otherise, false.</param>
-        protected virtual void Dispose(bool Managed)
+        /// <param name="managed">True if disposing managed resources.  Otherwise, false.</param>
+        private void Dispose(bool managed)
         {
             // Only dispose once
             if (Disposing) return;
 
-            if (!Managed)
-            {
+            Disposing = true;
 
-            }
-
+            if (!managed) return;
+            
             // Disconnect and unsubscribe from the events
             Disconnect();
 
             // Dispose of the socket wrapper
             ClientInstance.Dispose();
-
-            Disposing = true;
         }
         #endregion
     }
 }
+

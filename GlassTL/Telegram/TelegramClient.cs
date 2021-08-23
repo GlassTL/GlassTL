@@ -4,17 +4,21 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using GlassTL.Telegram.MTProto;
-using GlassTL.Telegram.Network;
-using GlassTL.Telegram.Exceptions;
+using GlassTL.Telegram.Network.Senders;
+using GlassTL.Telegram.Network.Connection;
 using GlassTL.Telegram;
 using GlassTL.Telegram.Utils;
 using System.Text;
 using System.Security.Cryptography;
 using GlassTL.Telegram.MTProto.Crypto;
 using static GlassTL.Telegram.Utils.PeerManager;
+using System.Security;
 
 namespace GlassTL.Telegram
 {
+    using EventArgs;
+    using GlassTL.Exceptions;
+
     public sealed class TelegramClient
     {
         #region Private-Members
@@ -26,11 +30,11 @@ namespace GlassTL.Telegram
         /// <summary>
         /// The default production Data Center
         /// </summary>
-        private DataCenter DefaultDataCenter => new DataCenter("149.154.175.55", 443, false, 1);
+        //private DataCenter DefaultDataCenter => new DataCenter("149.154.167.50", 443, false, 1);
         /// <summary>
         /// The default test Data Center
         /// </summary>
-        private DataCenter DefaultTestDataCenter => new DataCenter("149.154.175.10", 443, true, 1);
+        private DataCenter DefaultTestDataCenter => new DataCenter("149.154.167.40", 443, true, 1);
 
         /// <summary>
         /// The API ID used when communicating with the server
@@ -44,7 +48,7 @@ namespace GlassTL.Telegram
         /// <summary>
         /// The underlying connection used with communicating with the server
         /// </summary>
-        private Connection Connection { get; set; }
+        private SocketConnection Connection { get; set; }
         /// <summary>
         /// The session object which contains information like the current DC, server auth info, signed in user, and additional settings
         /// </summary>
@@ -63,6 +67,8 @@ namespace GlassTL.Telegram
         private string PhoneNumber { get; set; } = "";
         private string AuthCode { get; set; } = "";
 
+        private TaskCompletionSource<bool> LoginTaskComplete = null;
+
         //private int pts = 0, date = 0, qts = 0;
         #endregion
 
@@ -70,7 +76,7 @@ namespace GlassTL.Telegram
         /// <summary>
         /// Gets a value indicating whether or not we are connected to a Test DC or not.
         /// </summary>
-        public bool UseTestDC => Session?.DataCenter?.TestDC ?? false;
+        public bool UseTestDC => true;// Session?.DataCenter?.TestDC ?? false;
         /// <summary>
         /// Gets the currently logged in user (if applicable) or null if no user is signed in
         /// </summary>
@@ -98,7 +104,7 @@ namespace GlassTL.Telegram
             Logger.Log(Logger.Level.Info, "Initializing TelegramClient");
 
             // These must be provided.  Default API info is from the official android client
-            if (apiId == null || apiHash == null)
+            if (!apiId.HasValue || string.IsNullOrEmpty(apiHash))
             {
                 Logger.Log(Logger.Level.Debug, "API info not supplied or partial. Using default");
                 ApiId = 6;
@@ -107,7 +113,7 @@ namespace GlassTL.Telegram
             else
             {
                 Logger.Log(Logger.Level.Debug, "Using API info supplied by the user.");
-                ApiId = (int)apiId;
+                ApiId = apiId.Value;
                 ApiHash = apiHash;
             }
 
@@ -118,20 +124,20 @@ namespace GlassTL.Telegram
             // DC (as requested by the user), assign a new DC to the session
             if (Session.DataCenter == null || Session.DataCenter.TestDC != useTestDC)
             {
-                Session.DataCenter = useTestDC ? DefaultTestDataCenter : DefaultDataCenter;
+                Session.DataCenter = DefaultTestDataCenter; // useTestDC ? DefaultTestDataCenter : DefaultDataCenter;
             }
 
             // Create a connection to the provided DC
-            Connection = new TCPFull(Session.DataCenter);
+            Connection = new TcpFull(Session.DataCenter);
 
             // Create a new sender.
             // Note: We are passing a reference to the helper so that any changes
             // made during runtime will still be in the session for when we save it
             Sender = new MTProtoSender(ref Session.Helper);
 
-            Sender.UpdateReceivedEvent += (sender, e) =>
+            Sender.UpdateReceivedEvent += async (sender, e) =>
             {
-                OnUpdate(e);
+                _ = Task.Run(() => OnUpdate(e));
             };
 
             Logger.Log(Logger.Level.Info, "Created TelegramClient");
@@ -228,7 +234,7 @@ namespace GlassTL.Telegram
                 Sender.ResetServerAuthentication();
 
                 // Create a new connection to the DC
-                Connection = new TCPFull(dataCenter);
+                Connection = new TcpFull(dataCenter);
 
                 // Connect and see what happens
                 await Connect();
@@ -240,7 +246,7 @@ namespace GlassTL.Telegram
                 if (Session.TLUser != null)
                 {
                     var imported = await Sender.Send(Schema.auth.importAuthorization(new { id = exported["Id"], bytes = exported["Bytes"] }));
-                    OnUpdateUser(new TLObjectEventArgs(imported["User"]));
+                    _ = Task.Run(() => OnUpdateUser(new TLObjectEventArgs(imported["User"])));
                 }
 
                 Session.Save();
@@ -282,7 +288,7 @@ namespace GlassTL.Telegram
                         continue;
                     }
 
-                    OnUpdate(new TLObjectEventArgs(result));
+                    _ = Task.Run(() => OnUpdate(new TLObjectEventArgs(result)));
 
                     if ((string)result["_"] == "rpc_error")
                     {
@@ -290,8 +296,12 @@ namespace GlassTL.Telegram
 
                         if (ErrorMessage.StartsWith("FLOOD_WAIT_"))
                         {
-                            // Flood waited just gets an exception.  There's nothing we can do.
-                            throw new FloodWaitException(int.Parse(Regex.Match(ErrorMessage, @"\d+").Value));
+                            var wait = int.Parse(Regex.Match(ErrorMessage, @"\d+").Value);
+                            Console.WriteLine($"Flood Wait detected.  Pausing for {wait} seconds.  After which, the request will be resent.");
+                            await Task.Delay(wait * 1000);
+                            continue;
+                            //// Flood waited just gets an exception.  There's nothing we can do.
+                            //throw new FloodWaitException(int.Parse(Regex.Match(ErrorMessage, @"\d+").Value));
                         }
                         else if (ErrorMessage.StartsWith("PHONE_MIGRATE_"))
                         {
@@ -346,7 +356,7 @@ namespace GlassTL.Telegram
                         }
                         else if (ErrorMessage == "SRP_ID_INVALID")
                         {
-                            throw new SrpIDInvalidException("The password was not entered in time");
+                            throw new SrpIdInvalidException("The password was not entered in time");
                         }
                         else
                         {
@@ -408,20 +418,97 @@ namespace GlassTL.Telegram
         /// </summary>
         public event EventHandler<TLObjectEventArgs> NewMessageEvent;
 
-        private void OnPhoneNumberRequested(TLObjectEventArgs e)
+        private async Task OnPhoneNumberRequested(TLObjectEventArgs e)
         {
-            var args = new object[] { this, e };
-            PhoneNumberRequestedEvent.RaiseEventSafe(ref args);
+            if (PhoneNumberRequestedEvent != null)
+            {
+                var args = new object[] { this, e };
+                PhoneNumberRequestedEvent.RaiseEventSafe(ref args);
+                return;
+            }
+
+            Logger.Log(Logger.Level.Info, "Unable to query for phone number.  Obtaining manually.");
+
+            while (true)
+            {
+                var phoneNumber = SmartConsole.ReadLine("Please enter the phone number:");
+
+                try
+                {
+                    if (await SetPhoneNumber(phoneNumber)) break;
+                    Console.WriteLine("Unable to log in with that phone number.  Please try again");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex.Message);
+                }
+            }
+
+            Logger.Log(Logger.Level.Info, "Successfully sent phone number");
         }
-        private void OnAuthCodeRequested(TLObjectEventArgs e)
+        private async Task OnAuthCodeRequested(TLObjectEventArgs e)
         {
-            var args = new object[] { this, e };
-            AuthCodeRequestedEvent.RaiseEventSafe(ref args);
+            if (AuthCodeRequestedEvent != null)
+            {
+                var args = new object[] { this, e };
+                AuthCodeRequestedEvent.RaiseEventSafe(ref args);
+                return;
+            }
+
+            Logger.Log(Logger.Level.Info, "Unable to query for Auth Code.  Obtaining manually.");
+
+            while (true)
+            {
+                var CodeMethod = e.TLObject["type"].GetAs<string>("_");
+                var authcode = SmartConsole.ReadLine($"Please enter the auth code sent via {CodeMethod} (Enter to resend differently):");
+
+                if (string.IsNullOrEmpty(authcode))
+                {
+                    if (await ReSendAuthCode()) continue;
+
+                    Console.WriteLine("Resending the auth code failed.");
+                    break;
+                }
+
+                if (!await SendAuthCode(authcode))
+                {
+                    Console.WriteLine("That didn't work.  Please try again");
+                    continue;
+                }
+
+                break;
+            }
+
+            Logger.Log(Logger.Level.Info, "Successfully verified auth code.");
+
         }
-        private void OnCloudPasswordRequested(TLObjectEventArgs e)
+        private async Task OnCloudPasswordRequested(TLObjectEventArgs e)
         {
-            var args = new object[] { this, e };
-            CloudPasswordRequestedEvent.RaiseEventSafe(ref args);
+            if (CloudPasswordRequestedEvent != null)
+            {
+                var args = new object[] { this, e };
+                CloudPasswordRequestedEvent.RaiseEventSafe(ref args);
+                return;
+            }
+
+            Logger.Log(Logger.Level.Info, "Unable to query for Cloud Password.  Obtaining manually.");
+
+            while (true)
+            {
+                var password = SmartConsole.ReadPassword("Please enter the password on the account:");
+
+                try
+                {
+                    if (await MakeAuthWithPasswordAsync(password)) break;
+                    Console.WriteLine("Unable to validate the password.  Please try again");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex.Message);
+                }
+            }
+
+            Logger.Log(Logger.Level.Info, "Successfully verified Cloud Password");
         }
         private void OnUpdateUser(TLObjectEventArgs e)
         {
@@ -440,12 +527,43 @@ namespace GlassTL.Telegram
             var args = new object[] { this, e };
             UpdateUserEvent.RaiseEventSafe(ref args);
 
+            _ = Task.Run(() => LoginTaskComplete.TrySetResult(true));
+
             Session.Save();
         }
-        private void OnNameRequested(TLObjectEventArgs e)
+        private async Task OnNameRequested(TLObjectEventArgs e)
         {
-            var args = new object[] { this, e };
-            NameRequestedEvent.RaiseEventSafe(ref args);
+            if (NameRequestedEvent.GetInvocationList().Length == 0)
+            {
+                var args = new object[] { this, e };
+                NameRequestedEvent.RaiseEventSafe(ref args);
+                return;
+            }
+
+            Logger.Log(Logger.Level.Info, "Unable to query for user's name.  Obtaining manually.");
+
+            while (true)
+            {
+                var FirstName = string.Empty;
+                var LastName = string.Empty;
+
+                while (string.IsNullOrEmpty(FirstName))
+                {
+                    FirstName = SmartConsole.ReadLine("Please enter your First Name (required):");
+                }
+
+                LastName = SmartConsole.ReadLine("Please enter your Last Name (optional):");
+
+                if (!await CreateAccount(FirstName, LastName))
+                {
+                    Console.WriteLine("Unable to create an account with the given information.  Please try again");
+                    continue;
+                }
+
+                break;
+            }
+
+            Logger.Log(Logger.Level.Info, "Successfully verified Cloud Password");
         }
         private void OnClientLoggedOut(TLObjectEventArgs e)
         {
@@ -453,10 +571,20 @@ namespace GlassTL.Telegram
             CurrentUser = null;
             Session.Reset();
 
-            var args = new object[] { this, e };
-            ClientLoggedOutEvent.RaiseEventSafe(ref args);
+            if (ClientLoggedOutEvent != null)
+            {
+                var args = new object[] { this, e };
+                ClientLoggedOutEvent.RaiseEventSafe(ref args);
+                return;
+            }
+
+            Logger.Log(Logger.Level.Info, "User loggout not handled.  Handling manually.");
+
+            Console.WriteLine("Your account was logged out due to either inactivity or a manual action from another device.");
+            Task.Run(() => OnPhoneNumberRequested(null));
+
         }
-        private async void OnUpdate(TLObjectEventArgs e)
+        private async Task OnUpdate(TLObjectEventArgs e)
         {
             Session.KnownPeers.ParsePeers(e.TLObject);
 
@@ -473,43 +601,31 @@ namespace GlassTL.Telegram
                     ProcessUpdate(new TLObject(e.TLObject["update"]), e.TLObject);
                     break;
                 case "updateShortMessage":
-                    var msg_id = (int)e.TLObject["id"];
-                    var sender_id = (int)(((bool)e.TLObject["out"]) ? Session.TLUser["id"] : e.TLObject["user_id"]);
-                    var recipient_id = (int)(((bool)e.TLObject["out"]) ? e.TLObject["user_id"] : Session.TLUser["id"]);
-
-                    TLObject sender_peer;
-                    TLObject recipient_peer;
-
-                    if ((bool)e.TLObject["out"])
-                    {
-                        sender_peer = Session.TLUser;
-                        recipient_peer = await GetPeerFromID(recipient_id);
-                    }
-                    else
-                    {
-                        sender_peer = await GetPeerFromID(sender_id);
-                        recipient_peer = Session.TLUser;
-                    }
-
+                    var msgId          = e.TLObject.GetAs<int>("id");
+                    var senderId       = e.TLObject.GetAs<bool>("out") ? Session.TLUser.GetAs<int>("id") : e.TLObject.GetAs<int>("user_id");
+                    var recipientId    = e.TLObject.GetAs<bool>("out") ? e.TLObject.GetAs<int>("user_id") : Session.TLUser.GetAs<int>("id");
+                    var sender_peer    = e.TLObject.GetAs<bool>("out") ? Session.TLUser : await GetPeerFromID(senderId);
+                    var recipient_peer = e.TLObject.GetAs<bool>("out") ? await GetPeerFromID(recipientId) : Session.TLUser;
+                    
                     TLObject updateShort = Schema.updateNewMessage(new
                     {
                         message = Schema.message(new
                         {
-                            @out = e.TLObject["out"],
-                            mentioned = e.TLObject["mentioned"],
-                            media_unread = e.TLObject["media_unread"],
-                            silent = e.TLObject["silent"],
-                            id = msg_id,
-                            from_id = sender_id,
-                            to_id = Schema.peerUser(new { user_id = recipient_id }),
-                            fwd_from = e.TLObject["fwd_from"],
-                            via_bot_id = e.TLObject["via_bot_id"],
+                            @out            = e.TLObject["out"],
+                            mentioned       = e.TLObject["mentioned"],
+                            media_unread    = e.TLObject["media_unread"],
+                            silent          = e.TLObject["silent"],
+                            id              = msgId,
+                            from_id         = senderId,
+                            to_id           = Schema.peerUser(new { user_id = recipientId }),
+                            fwd_from        = e.TLObject["fwd_from"],
+                            via_bot_id      = e.TLObject["via_bot_id"],
                             reply_to_msg_id = e.TLObject["reply_to_msg_id"],
-                            date = e.TLObject["date"],
-                            message = e.TLObject["message"],
-                            entities = e.TLObject["entities"]
+                            date            = e.TLObject["date"],
+                            message         = e.TLObject["message"],
+                            entities        = e.TLObject["entities"]
                         }),
-                        pts = e.TLObject["pts"],
+                        pts       = e.TLObject["pts"],
                         pts_count = e.TLObject["pts_count"]
                     });
 
@@ -518,10 +634,7 @@ namespace GlassTL.Telegram
                         sender_peer, recipient_peer
                     };
 
-                    ProcessUpdate(new TLObject(updateShort), e.TLObject);
-                    break;
-                default:
-                    // Probably back end.  Don't need it
+                    ProcessUpdate(updateShort, e.TLObject);
                     break;
             }
         }
@@ -538,7 +651,7 @@ namespace GlassTL.Telegram
         /// </summary>
         /// <param name="RawNumer">The raw unformatted input</param>
         /// <returns>The formatted number if successful.  Otherwise an empty string.</returns>
-        public string FormatNumber(string RawNumer)
+        private static string FormatNumber(string RawNumer)
         {
             // Cannot work with an empty value
             if (string.IsNullOrEmpty(RawNumer)) return string.Empty;
@@ -591,7 +704,7 @@ namespace GlassTL.Telegram
                 }));
 
                 // Tell the user we are waiting for it
-                OnAuthCodeRequested(new TLObjectEventArgs(AuthCodeInfo));
+                _ = Task.Run(() => OnAuthCodeRequested(new TLObjectEventArgs(AuthCodeInfo)));
 
                 // Return success
                 return true;
@@ -633,7 +746,7 @@ namespace GlassTL.Telegram
                 }));
 
                 // Let the user know we got account
-                OnUpdateUser(new TLObjectEventArgs(CurrentUser));
+                _ = Task.Run(() => OnUpdateUser(new TLObjectEventArgs(CurrentUser)));
 
                 CurrentUser = new TLObject(CurrentUser["user"]);
 
@@ -644,7 +757,7 @@ namespace GlassTL.Telegram
             {
                 // In the case the account doesn't exist,
                 // tell the user that we need more info
-                OnNameRequested(null);
+                _ = Task.Run(() => OnNameRequested(null));
 
                 // Success
                 return true;
@@ -654,7 +767,7 @@ namespace GlassTL.Telegram
                 // In the case the account does exist,
                 // but is password protected
                 CloudPasswordInfo = await GetPasswordSetting();
-                OnCloudPasswordRequested(new TLObjectEventArgs(CloudPasswordInfo));
+                _ = Task.Run(() => OnCloudPasswordRequested(new TLObjectEventArgs(CloudPasswordInfo)));
 
                 // Success
                 return true;
@@ -683,7 +796,7 @@ namespace GlassTL.Telegram
                 }));
 
                 // Tell the user we are waiting for it
-                OnAuthCodeRequested(new TLObjectEventArgs(AuthCodeInfo));
+                _ = Task.Run(() => OnAuthCodeRequested(new TLObjectEventArgs(AuthCodeInfo)));
 
                 return true;
             }
@@ -719,8 +832,8 @@ namespace GlassTL.Telegram
                 }));
 
                 // Pass the account on to the user
-                OnUpdateUser(new TLObjectEventArgs(CurrentUser));
-
+                _ = Task.Run(() => OnUpdateUser(new TLObjectEventArgs(CurrentUser)));
+                
                 // Success!
                 return true;
             }
@@ -744,7 +857,7 @@ namespace GlassTL.Telegram
                 return null;
             }
         }
-        public async Task<bool> MakeAuthWithPasswordAsync(string password_str)
+        public async Task<bool> MakeAuthWithPasswordAsync(SecureString password_str)
         {
             try
             {
@@ -754,11 +867,11 @@ namespace GlassTL.Telegram
                 }));
 
                 // Let the user know we got account
-                OnUpdateUser(new TLObjectEventArgs(CurrentUser));
+                _ = Task.Run(() => OnUpdateUser(new TLObjectEventArgs(CurrentUser)));
 
                 return true;
             }
-            catch (SrpIDInvalidException)
+            catch (SrpIdInvalidException)
             {
                 try
                 {
@@ -770,7 +883,7 @@ namespace GlassTL.Telegram
                     }));
 
                     // Let the user know we got account
-                    OnUpdateUser(new TLObjectEventArgs(CurrentUser));
+                    _ = Task.Run(() => OnUpdateUser(new TLObjectEventArgs(CurrentUser)));
 
                     return true;
                 }
@@ -790,7 +903,7 @@ namespace GlassTL.Telegram
         }
         #endregion
         #region Helpers
-        private async Task<TLObject> GetPeerFromID(int ID)
+        private async Task<TLObject> GetPeerFromID(long ID)
         {
             PeerInfo? peer = null;
             TLObject LastPeer = null;
@@ -862,18 +975,107 @@ namespace GlassTL.Telegram
                     //}
                 }
 
-                return null;
+                return peer.Value.AsTLObject();
             }
             catch (Exception ex)
             {
                 return null;
             }
         }
+        private async Task<TLObject> GetPeerFromUsername(string username)
+        {
+            PeerInfo? peer = null;
+            TLObject LastPeer = null;
+            TLObject LastMessage = null;
+            TLObject LastResult = null;
+
+            try
+            {
+                // Loop until we find the peer
+                while ((peer = Session.KnownPeers.GetPeer(username)) == null)
+                {
+                    // If we've already done this before and we didn't get a
+                    // slice (meaning we've reached the end) we can reasonably
+                    // return peer
+                    if (LastResult != null && (string)LastResult["_"] != "messages.dialogsSlice") break;
+
+                    // Get the dialogs
+                    LastResult = await RequestSafe(Schema.messages.getDialogs(new
+                    {
+                        exclude_pinned = false,
+                        folder_id = ChatFolderFolder.Normal,
+                        offset_date = LastMessage?["date"] ?? 0,
+                        offset_id = LastMessage?["id"] ?? 0,
+                        offset_peer = LastPeer?["peer"] ?? Schema.inputPeerEmpty,
+                        limit = 5,
+                        hash = 0
+                    }));
+
+                    // ToDo: These may throw errors if the user has no dialogs, etc
+                    LastPeer = new TLObject(((JArray)LastResult["dialogs"]).Reverse().First(x => x["top_message"] != null));
+                    LastMessage = new TLObject(((JArray)LastResult["messages"]).First(x => (int)x["id"] == (int)LastPeer["top_message"]));
+
+                    Session.KnownPeers.ParsePeers(LastResult);
+                }
+
+                if (peer != null)
+                {
+                    //if (peer.Value.Type == "user")
+                    //{
+                    //    TLObject tmp = await RequestSafe(Schema.users.getUsers(new
+                    //    {
+                    //        id = new TLObject[]
+                    //        { 
+                    //            Schema.inputUser(new
+                    //            {
+                    //                user_id = peer.Value.ID,
+                    //                access_hash = peer.Value.AccessHash
+                    //            })
+                    //        }
+                    //    }));
+
+                    //    if (((JArray)tmp).Count > 0) return new TLObject(tmp[0]);
+                    //}
+                    //else if (peer.Value.Type == "channel")
+                    //{
+                    //    TLObject tmp = await RequestSafe(Schema.channels.getChannels(new
+                    //    {
+                    //        id = new TLObject[]
+                    //        {
+                    //            Schema.inputChannel(new
+                    //            {
+                    //                channel_id = peer.Value.ID,
+                    //                access_hash = peer.Value.AccessHash
+                    //            })
+                    //        }
+                    //    }));
+
+                    //    if (((JArray)tmp["chats"]).Count > 0) return new TLObject(tmp["chats"][0]);
+                    //}
+                }
+
+                return peer.Value.AsTLObject();
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+        }
+        public async Task<TLObject> SendMessage(string Peer, string Message)
+        {
+            if (long.TryParse(Peer, out var PeerID))
+            {
+                return await SendMessage(await GetPeerFromID(PeerID), Message);
+            }
+
+            return await SendMessage(await GetPeerFromUsername(Peer), Message);
+        }
         public async Task<TLObject> SendMessage(TLObject Peer, string Message)
         {
             if (!IsUserAuthorized())
                 throw new InvalidOperationException("You must be logged in to send a message");
 
+            if (Peer == null) return null;
             if ((bool)Peer["min"] == true) Peer = await GetPeerFromID((int)Peer["id"]);
 
             TLObject rec = null;
@@ -954,7 +1156,7 @@ namespace GlassTL.Telegram
                     break;
             }
 
-            (var ParsedMessage, var ParsedEntities) = Helpers.ParseEntities(NewMessage);
+            var (ParsedMessage, ParsedEntities) = Helpers.ParseEntities(NewMessage);
 
             return await RequestSafe(
                 Schema.messages.editMessage(new
@@ -966,8 +1168,41 @@ namespace GlassTL.Telegram
                     entities = ParsedEntities
                 })
             );
+        }
+        public async Task<TLObject> DeleteMessage(TLObject Peer, TLObject Message)
+        {
+            if (!IsUserAuthorized())
+                throw new InvalidOperationException("You must be logged in to delete a message");
 
-            return null;
+            if ((bool)Peer["min"] == true) Peer = await GetPeerFromID((int)Peer["id"]);
+
+            switch ((string)Message["to_id"]["_"])
+            {
+                case "peerUser":
+                    return await RequestSafe(
+                                    Schema.messages.deleteMessages(new
+                                    {
+                                        revoke = true,
+                                        id = new int[] { int.Parse((string)Message["id"]) }
+                                    })
+                                );
+                case "peerChannel":
+                    Peer = await GetPeerFromID((int)Message["to_id"]["channel_id"]);
+
+                    return await RequestSafe(
+                                    Schema.channels.deleteMessages(new
+                                    {
+                                        channel = Schema.inputPeerChannel(new
+                                        {
+                                            channel_id = Peer["id"],
+                                            access_hash = (long)Peer["access_hash"]
+                                        }),
+                                        id = new int[] { int.Parse((string)Message["id"]) }
+                                    })
+                                );
+                default:
+                    throw new NotImplementedException();
+            }
         }
         //public async Task<TLObject> SendReply(TLObject Message, string message)
         //{
@@ -1132,9 +1367,9 @@ namespace GlassTL.Telegram
                 case "updateNewMessage":
                 case "updateNewChannelMessage":
                     //var from = ((JArray)original["users"]).Where(x => (int)x["id"] == (int)update["message"]["from_id"]).First();
-                    if (update["message"]["from_id"] != null && update["message"]["from_id"].Type != JTokenType.Null)
+                    if (update["message"]["from_id"] != null && update["message"]["from_id"].InternalType != JTokenType.Null)
                     {
-                        update["from_user"] = ((JArray)original["users"]).Where(x => (int)x["id"] == (int)update["message"]["from_id"]).FirstOrDefault();
+                        update["from_user"] = ((JArray)original["users"]).Where(x => (int)x["id"] == update["message"]["from_id"]).FirstOrDefault();
                     }
                     else
                     {
@@ -1152,7 +1387,7 @@ namespace GlassTL.Telegram
                             break;
                     }
 
-                    OnNewMessage(new TLObjectEventArgs(update));
+                    _ = Task.Run(() => OnNewMessage(new TLObjectEventArgs(update)));
                     break;
                 case "updateUserName":
 
@@ -1164,7 +1399,7 @@ namespace GlassTL.Telegram
                             .ToList()
                             .ForEach(x => Session.TLUser[((JProperty)x).Name] = ((JProperty)x).Value);
 
-                        OnUpdateUser(new TLObjectEventArgs(Session.TLUser));
+                        _ = Task.Run(() => OnUpdateUser(new TLObjectEventArgs(Session.TLUser)));
                     }
 
                     break;
@@ -1224,10 +1459,17 @@ namespace GlassTL.Telegram
         #endregion
 
         /// <summary>
-        /// Starts the client in the background
+        /// Initiates the connection and login/registration process 
         /// </summary>
-        public void Start()
+        public Task<bool> Start()
         {
+            if (LoginTaskComplete != null)
+            {
+                LoginTaskComplete.TrySetResult(false);
+            }
+
+            LoginTaskComplete = new TaskCompletionSource<bool>();
+
             Task.Run(async () =>
             {
                 try
@@ -1242,40 +1484,44 @@ namespace GlassTL.Telegram
                         {
                             // We need to send at least one request so that
                             // Telegram will start sending us updates
-                            TLObject tmp = await RequestSafe(Schema.users.getUsers(new {
+                            TLObject tmp = await RequestSafe(Schema.users.getUsers(new
+                            {
                                 id = new TLObject[] { Schema.inputUserSelf }
                             }));
 
                             // Alert to the fact we are signed in.
-                            CurrentUser = new TLObject(tmp[0]);
-                            OnUpdateUser(new TLObjectEventArgs(CurrentUser));
+                            CurrentUser = new TLObject(tmp[0]); // By Index?  can we change this?
+                            _ = Task.Run(() => OnUpdateUser(new TLObjectEventArgs(CurrentUser)));
 
                             // Stop so that we don't ask for the phone number
+                            LoginTaskComplete.TrySetResult(true);
                             return;
                         }
                         catch (NotSignedInException)
                         {
                             // If the user isn't signed in anymore, we can continue, and start the process over.
                             Logger.Log(Logger.Level.Error, $"We were logged in before but are no longer authorized.  Starting the process over.");
-                            OnClientLoggedOut(new TLObjectEventArgs(CurrentUser));
+                            _ = Task.Run(() => OnClientLoggedOut(new TLObjectEventArgs(CurrentUser)));
                         }
                         catch (Exception ex)
                         {
                             // An unknown error at this point.  Since we don't know what happened, let's fail and
                             // wait for the tickets to be opened...
                             Logger.Log(Logger.Level.Error, $"Failed to start the client.\n\n${ex.Message}");
+                            LoginTaskComplete.TrySetResult(false);
                             return;
                         }
                     }
 
-                    OnPhoneNumberRequested(null);
+                    _ = Task.Run(() => OnPhoneNumberRequested(null));
                 }
                 catch (Exception ex)
                 {
                     Logger.Log(Logger.Level.Error, $"Failed to start the client.\n\n${ex.Message}");
                 }
             });
-        }
 
+            return LoginTaskComplete.Task;
+        }
     }
 }

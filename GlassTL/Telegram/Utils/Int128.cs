@@ -4,18 +4,18 @@
 // </copyright>
 // --------------------------------------------------------------------------------------------------------------------
 
-using System;
-using System.Diagnostics;
-using System.Globalization;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
-using BigMath.Utils;
-using GlassTL.Telegram.Utils;
-
 namespace BigMath
 {
+    using System;
+    using System.Diagnostics;
+    using System.Globalization;
+    using System.Linq;
+    using System.Runtime.CompilerServices;
+    using System.Runtime.InteropServices;
+    using System.Text;
+    using BigMath.Utils;
+    using GlassTL.Telegram.Utils;
+
     /// <summary>
     ///     Represents a 128-bit signed integer.
     /// </summary>

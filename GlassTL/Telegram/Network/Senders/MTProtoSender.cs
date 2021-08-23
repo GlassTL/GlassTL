@@ -1,19 +1,22 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
-using System.IO.Compression;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Newtonsoft.Json.Linq;
-using GlassTL.Telegram.Extensions;
-using GlassTL.Telegram.MTProto;
-using GlassTL.Telegram.Utils;
-using GlassTL.Telegram.Exceptions;
-
-namespace GlassTL.Telegram.Network
+﻿namespace GlassTL.Telegram.Network.Senders
 {
+    using System;
+    using System.Collections.Concurrent;
+    using System.Collections.Generic;
+    using System.IO;
+    using System.IO.Compression;
+    using System.Linq;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using Newtonsoft.Json.Linq;
+    using Extensions;
+    using MTProto;
+    using Utils;
+    using Connection;
+    using Authentication;
+    using EventArgs;
+    using Exceptions;
+
     public class MTProtoSender
     {
         #region Private-Members
@@ -21,45 +24,49 @@ namespace GlassTL.Telegram.Network
         /// Since acks don't need to be sent right away, we have a handler to send any required
         /// acks on a regular schedule
         /// </summary>
-        private Task AckHandler = null;
-        private CancellationTokenSource AckCancellation = null;
+        private Task _ackHandler;
+        /// <summary>
+        /// Update salts periodically
+        /// </summary>
+        private readonly Task _saltUpdaterHandler = null;
+        private CancellationTokenSource _ackCancellation;
         /// <summary>
         /// Since properties can't be passed as refs, this is used as the actual object
         /// </summary>
-        private readonly MTProtoHelper _State = null;
+        private readonly MTProtoHelper _state;
         /// <summary>
-        /// A dymamic reference to the TLSchema class
+        /// A dynamic reference to the TLSchema class
         /// </summary>
         private dynamic Schema { get; } = new TLSchema();
         /// <summary>
         /// A Thread-Safe Collection (FIFO) that attempts to package multiple requests together for easier transport to the server
         /// </summary>
-        private MessagePacker SendQueue { get; } = null;
+        private MessagePacker SendQueue { get; }
         /// <summary>
         /// A Thread-Safe Dictionary containing Message IDs and their respective requests until a response is received from the server
         /// 
         /// Note: this will not contain batches.  Only the individual requests
         /// </summary>
-        private ConcurrentDictionary<long, RequestState> PendingQueue { get; } = new ConcurrentDictionary<long, RequestState>();
+        private ConcurrentDictionary<long, RequestState> PendingQueue { get; } = new();
         /// <summary>
         /// A Thread-Safe List of Message IDs that we received and must be acknowledged.
         /// </summary>
-        private ConcurrentBag<long> PendingAcks { get; } = new ConcurrentBag<long>();
+        private ConcurrentBag<long> PendingAcks { get; } = new();
         /// <summary>
         /// A Thread-Safe Buffer containing the last X number of acknowledged Message IDs.
         /// </summary>
-        private ConcurrentCircularBuffer<RequestState> SentAcks { get; } = new ConcurrentCircularBuffer<RequestState>(10);
+        private ConcurrentCircularBuffer<RequestState> SentAcks { get; } = new(10);
         #endregion
 
         #region Public-Members
         /// <summary>
         /// Provides Encryption, message ID handling, and more.
         /// </summary>
-        public MTProtoHelper State => _State;
+        public MTProtoHelper State => _state;
         /// <summary>
         /// The current connection to Telegram servers.
         /// </summary>
-        public Connection Connection { get; private set; } = null;
+        public SocketConnection Connection { get; private set; }
         /// <summary>
         /// The number of times to retry processes should they fail.
         /// </summary>
@@ -81,13 +88,13 @@ namespace GlassTL.Telegram.Network
         /// <summary>
         /// Indicates whether the communication with the server is established and authorized
         /// </summary>
-        public bool CommunicationEstablished { get; private set; } = false;
+        public bool CommunicationEstablished { get; private set; }
         /// <summary>
         /// Indicates the connection status.
         /// 
         /// ToDo: We should probably add an enum with specific statuses besides just this
         /// </summary>
-        public bool Reconnecting { get; private set; } = false;
+        public bool Reconnecting { get; private set; }
         #endregion
 
         #region Public-Events
@@ -105,16 +112,16 @@ namespace GlassTL.Telegram.Network
             try
             {
                 Logger.Log(Logger.Level.Info, "Attempting to deserialize data to a TLObject");
-                if (!(State.DecryptMessageData(e.Data) is TLObject Message))
+                if (State.DecryptMessageData(e.GetData()) is not { } message)
                 {
                     Logger.Log(Logger.Level.Info, "The data could not be deserialized.  Skipping.");
                     return;
                 }
 
-                Logger.Log(Logger.Level.Info, $"Processing TLObject: {Message["_"]}");
-                await ProcessUpdate(Message);
+                Logger.Log(Logger.Level.Info, $"Processing TLObject: {message["_"]}");
+                await ProcessUpdate(message);
 
-                var unawaited = Task.Run(async () => await ProcessSendQueue());
+                var _ = Task.Run(async () => await ProcessSendQueue());
             }
             catch (Exception ex)
             {
@@ -134,9 +141,9 @@ namespace GlassTL.Telegram.Network
             // a new Helper.  This will update the original as well
             if (Helper == null) Helper = new MTProtoHelper(null);
             // Save the reference to the Helper
-            _State = Helper;
+            _state = Helper;
             // Create a new Thread Safe packer for all the requests
-            SendQueue = new MessagePacker(ref _State);
+            SendQueue = new MessagePacker(ref _state);
         }
         #endregion
 
@@ -144,7 +151,7 @@ namespace GlassTL.Telegram.Network
         /// <summary>
         /// Creates a new connection to the server using a given <see cref="Connection"/>
         /// </summary>
-        public async Task Connect(Connection connection)
+        public async Task Connect(SocketConnection connection)
         {
             // If a connection is already made, there's no need to make a new one.
             if (CommunicationEstablished) return;
@@ -168,8 +175,8 @@ namespace GlassTL.Telegram.Network
             {
                 // Stop the ack processing loop.
                 Logger.Log<MTProtoSender>(Logger.Level.Debug, $"Trying to stop Ack Handler");
-                if (AckCancellation != null) AckCancellation.Cancel();
-                if (AckHandler != null) AckHandler.Wait();
+                if (_ackCancellation != null) _ackCancellation.Cancel();
+                if (_ackHandler != null) _ackHandler.Wait();
 
                 // Close the connection to the server
                 // ToDo: Should we also dispose?
@@ -283,11 +290,11 @@ namespace GlassTL.Telegram.Network
                 // from the server.  Acks do not and, if added, would sit forever
                 // ToDo: add support for AddRange
                 SendData.Batch
-                    .Where(x => (string)x.Request["_"] != "msgs_ack")
+                    .Where(x => x.Request.GetAs<string>("_") != "msgs_ack")
                     .ToList().ForEach(x => PendingQueue[x.MessageID] = x);
 
                 var encrypted = State.EncryptMessageData(SendData.Data);
-                var decrypted = State.DecryptMessageData(encrypted, true);
+               // var decrypted = State.DecryptMessageData(encrypted, true);
 
                 // Send the messages to the server
                 await Connection.Send(encrypted);
@@ -332,6 +339,57 @@ namespace GlassTL.Telegram.Network
                     // Create a request that contains the list of acks
                     var Acks_Request = new RequestState(Schema.msgs_ack(new { msg_ids = acks }));
                     
+                    // Add the request to both the send queue (to be sent to the server) and
+                    // the sent acks queue (in case we need to resend.  We don't want to place
+                    // in pending since there shouldn't be a response.
+                    SendQueue.Add(Acks_Request);
+                    SentAcks.Put(Acks_Request);
+
+                    // Send the acks to the server
+                    // ToDo: If the user will be polling for updates, can we skip this line
+                    // and let the acks be sent for us?
+                    Task unawaited = Task.Run(() => ProcessSendQueue());
+                }
+                catch (TaskCanceledException)
+                {
+                    // We don't really care if the task was cancelled.
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    // We don't really care if the task was cancelled.
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    // ToDo: Do we really want to skip all acks when this happens?  Likely we
+                    // will encounter the same error again if we reprocess...
+                    Logger.Log(Logger.Level.Error, $"An error occurred process acks.  Skipping.\n\n{ex.Message}");
+                }
+
+            }
+        }
+        private async Task SaltHandlerMethod(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // Send every 5 hours (max 64)
+                    await Task.Delay(5 * 60 * 60 * 1000, cancellationToken);
+
+                    // Don't run this time if there aren't any messages to acknowledge
+                    if (!PendingAcks.Any()) continue;
+
+                    // Take all the required acks out of the bag
+                    var acks = new List<long>();
+                    while (PendingAcks.TryTake(out var ack)) acks.Add(ack);
+
+                    Logger.Log(Logger.Level.Debug, $"Found {acks.Count} messages that need acknowledgement.  Adding them to the payload.");
+
+                    // Create a request that contains the list of acks
+                    var Acks_Request = new RequestState(Schema.msgs_ack(new { msg_ids = acks }));
+
                     // Add the request to both the send queue (to be sent to the server) and
                     // the sent acks queue (in case we need to resend.  We don't want to place
                     // in pending since there shouldn't be a response.
@@ -438,8 +496,8 @@ namespace GlassTL.Telegram.Network
             Connection.DataReceivedEvent += Connection_DataReceivedEvent;
 
             Logger.Log<MTProtoSender>(Logger.Level.Debug, $"Starting Ack Handler");
-            AckCancellation = new CancellationTokenSource();
-            AckHandler = Task.Run(() => AckHandlerMethod(AckCancellation.Token));
+            _ackCancellation = new CancellationTokenSource();
+            _ackHandler = Task.Run(() => AckHandlerMethod(_ackCancellation.Token));
         }
 
         /// <summary>
@@ -489,40 +547,40 @@ namespace GlassTL.Telegram.Network
         /// <summary>
         /// Attempts to handle the message on our side in the case it's a backend update
         /// </summary>
-        /// <param name="Message">The update in question</param>
+        /// <param name="message">The update in question</param>
         /// <returns>True if the message was handled.  Otherwise, false.</returns>
-        private async Task<bool> ProcessUpdate(TLObject Message)
+        private async Task<bool> ProcessUpdate(TLObject message)
         {
-            Logger.Log(Logger.Level.Info, $"Beginning internal update processing of \"{(string)Message["body"]["_"]}\"");
+            Logger.Log(Logger.Level.Info, $"Beginning internal update processing of \"{message["body"]["_"]}\"");
 
             try
             {
-                if (((int)Message["seqno"] & 0x01) != 0)
+                if ((message.GetAs<int>("seqno") & 0x01) != 0)
                 {
-                    Logger.Log(Logger.Level.Debug, $"Adding \"{(long)Message["msg_id"]}\" to be acked");
-                    PendingAcks.Add((long)Message["msg_id"]);
+                    Logger.Log(Logger.Level.Debug, $"Adding \"{message.GetAs<long>("msg_id")}\" to be acked");
+                    PendingAcks.Add(message.GetAs<long>("msg_id"));
                 }
 
-                var args = new object[] { this, new TLObjectEventArgs(new TLObject(Message["body"])) };
+                var args = new object[] { this, new TLObjectEventArgs(new TLObject(message["body"])) };
                 UpdateReceivedEvent.RaiseEventSafe(ref args);
 
-                return (Message["body"].Value<string>("_")) switch
+                return message["body"].GetAs<string>("_") switch
                 {
-                    "bad_server_salt" => ProcessBadSalt(Message),
-                    "bad_msg_notification" => ProcessBadMsgNotification(Message),
-                    "future_salts" => ProcessFutureSalts(Message),
-                    "gzip_packed" => await ProcessGzipPacked(Message),
-                    "msg_container" => ProcessMessageContainer(Message),
-                    "msg_detailed_info" => ProcessMessageDetailedInfo(Message),
-                    "msg_new_detailed_info" => ProcessNewMessageDetailedInfo(Message),
-                    "msg_resend_req" => ProcessMessageResendRequest(Message),
-                    "msgs_ack" => ProcessMessageAck(Message),
-                    "msgs_all_info" => ProcessMessageInfoAll(Message),
-                    "msgs_state_req" => ProcessMessageStateReqest(Message),
-                    "new_session_created" => ProcessNewSessionCreated(Message),
-                    "pong" => ProcessPong(Message),
-                    "rpc_result" => await ProcessRPCResult(Message),
-                    _ => true,
+                    "bad_server_salt"       => ProcessBadSalt(message),
+                    "bad_msg_notification"  => ProcessBadMsgNotification(message),
+                    "future_salts"          => ProcessFutureSalts(message),
+                    "gzip_packed"           => await ProcessGzipPacked(message),
+                    "msg_container"         => await ProcessMessageContainer(message),
+                    "msg_detailed_info"     => ProcessMessageDetailedInfo(message),
+                    "msg_new_detailed_info" => ProcessNewMessageDetailedInfo(message),
+                    "msg_resend_req"        => ProcessMessageResendRequest(message),
+                    "msgs_ack"              => ProcessMessageAck(message),
+                    "msgs_all_info"         => ProcessMessageInfoAll(message),
+                    "msgs_state_req"        => ProcessMessageStateReqest(message),
+                    "new_session_created"   => ProcessNewSessionCreated(message),
+                    "pong"                  => ProcessPong(message),
+                    "rpc_result"            => await ProcessRPCResult(message),
+                    _                       => true,
                 };
             }
             catch (Exception ex)
@@ -532,146 +590,111 @@ namespace GlassTL.Telegram.Network
             }
         }
 
-        private bool ProcessBadSalt(TLObject Message)
+        private bool ProcessBadSalt(TLObject message)
         {
             try
             {
                 Logger.Log(Logger.Level.Info, $"Updating salt");
 
                 // Update the Salt
-                State.Salt = (long)Message["body"]["new_server_salt"];
+                State.Salt = message["body"]["new_server_salt"];
 
                 // Requeue the message(s) that triggered the error
-                var StatesToResend = GetStatesByID((long)Message["body"]["bad_msg_id"])
-                    ?? throw new Exception($"A message or container with id {(long)Message["body"]["bad_msg_id"]} could not found.  Skipping.");
+                var statesToResend = GetStatesByID((long)message["body"]["bad_msg_id"])
+                    ?? throw new Exception($"A message or container with id {(long)message["body"]["bad_msg_id"]} could not found.  Skipping.");
 
-                Logger.Log(Logger.Level.Debug, $"Identified {StatesToResend.Count()} message(s) to resend");
+                Logger.Log(Logger.Level.Debug, $"Identified {statesToResend.Count()} message(s) to resend");
 
-                StatesToResend.ToList().ForEach(x => {
-                    var ID = x.ContainerID == -1L ? $"{x.MessageID}" : $"{x.ContainerID}:{x.MessageID}";
-                    Logger.Log(Logger.Level.Debug, $"Requeuing {ID} - {x.Request["_"]}");
+                statesToResend.ToList().ForEach(x => {
+                    var id = x.ContainerID == -1L ? $"{x.MessageID}" : $"{x.ContainerID}:{x.MessageID}";
+                    Logger.Log(Logger.Level.Debug, $"Requeuing {id} - {x.Request["_"]}");
                     SendQueue.Add(x);
                 });
+
+
 
             }
             catch (Exception ex)
             {
-                Logger.Log(Logger.Level.Error, $"An error occurrect while updating the salt.\n\n{ex.Message}");
+                Logger.Log(Logger.Level.Error, $"An error occurred while updating the salt.\n\n{ex.Message}");
             }
 
             // Yes, we handled it
             return true;
         }
-        private bool ProcessBadMsgNotification(TLObject Message)
+        private bool ProcessBadMsgNotification(TLObject message)
         {
             try
             {
-                Logger.Log(Logger.Level.Debug, $"Error code {(long)Message["body"]["bad_msg_id"]}");
+                Logger.Log(Logger.Level.Debug, $"Error code {(long)message["body"]["bad_msg_id"]}");
 
-                var states = GetStatesByID((long)Message["body"]["bad_msg_id"])
-                    ?? throw new Exception($"A message or container with id { (long)Message["body"]["bad_msg_id"] } could not found.  Skipping.");
+                var states = GetStatesByID((long)message["body"]["bad_msg_id"])
+                    ?? throw new Exception($"A message or container with id {(long)message["body"]["bad_msg_id"]} could not found.  Skipping.");
 
-                Logger.Log(Logger.Level.Debug, $"Identified {states.Count()} messages as containing an error");
+                Logger.Log(Logger.Level.Debug, $"Identified {states.Length} messages as containing an error");
 
-                switch ((int)Message["body"]["error_code"])
+                switch ((BadMessageErrorCodes)message["body"].GetAs<int>("error_code"))
                 {
-                    case 16:
-                    case 17:
+                    case BadMessageErrorCodes.MessageIdTooLow:
+                    case BadMessageErrorCodes.MessageIdTooHigh:
                         // Sent msg_id too low or too high (respectively).
                         // Use the current msg_id to determine the right time offset.
                         Logger.Log(Logger.Level.Debug, $"Updating time offset");
-                        State.UpdateTimeOffset((long)Message["msg_id"]);
+                        State.UpdateTimeOffset((long)message["msg_id"]);
                         break;
-                    case 18:
+                    case BadMessageErrorCodes.MessageIdInvalid:
                         // Invalid msg_id (msg_id should be divisible by 4)
                         // This shouldn't happen as we have checks in place to make sure it doesn't.
                         // If these checks have failed, we should probably revaluate our code
-                        var sad18 = new Exception("The message was rejected by the server for having a bad Message ID.  This is not your fault.  Please contact a dev to have this issue resolved.");
-                        states.ToList().ForEach(x => {
-                            Logger.Log(Logger.Level.Debug, $"Throwing exception on the message {x.MessageID} - {x.Request["_"]}");
-                            x.Response.TrySetException(sad18);
-                            SendQueue.Add(x);
-                        });
-                        throw sad18;
-                    case 19:
+                        ThrowExceptionOn(states, new Exception("The message was rejected by the server for having a bad Message ID.  This is not your fault.  Please contact a dev to have this issue resolved."));
+                        break;
+                    case BadMessageErrorCodes.DuplicateMessageId:
                         // Container msg_id is the same as msg_id of a previously received
-                        var sad19 = new Exception("The message was rejected by the server for having a bad Message ID.  This is not your fault.  Please contact a dev to have this issue resolved.");
-                        states.ToList().ForEach(x => {
-                            Logger.Log(Logger.Level.Debug, $"Throwing exception on the message {x.MessageID} - {x.Request["_"]}");
-                            x.Response.TrySetException(sad19);
-                            SendQueue.Add(x);
-                        });
-                        throw sad19;
-                    case 20:
+                        ThrowExceptionOn(states, new Exception("The message was rejected by the server for having a bad Message ID.  This is not your fault.  Please contact a dev to have this issue resolved."));
+                        break;
+                    case BadMessageErrorCodes.MessageIdTooOld:
                         // Message too old, and it cannot be verified whether the server
                         // has received a message with this msg_id or not
-                        var sad20 = new Exception("The message was rejected by the server for having an old Message ID.  This is not your fault.  Please contact a dev to have this issue resolved.");
-                        states.ToList().ForEach(x => {
-                            Logger.Log(Logger.Level.Debug, $"Throwing exception on the message {x.MessageID} - {x.Request["_"]}");
-                            x.Response.TrySetException(sad20);
-                            SendQueue.Add(x);
-                        });
-                        throw sad20;
-                    case 32:
-                        // msg_seqno too low, so just pump it up by some "large" amount
+                        ThrowExceptionOn(states, new Exception("The message was rejected by the server for having an old Message ID.  This is not your fault.  Please contact a dev to have this issue resolved."));
+                        break;
+                    case BadMessageErrorCodes.MessageSequenceTooLow:
+                        // Just pump it up by some "large" amount
                         // TODO A better fix would be to start with a new fresh session ID
-                        Logger.Log(Logger.Level.Debug, $"Updating sequence number");
+                        Logger.Log(Logger.Level.Debug, $"Incrementing sequence number");
                         State.Sequence += 64;
                         break;
-                    case 33:
-                        Logger.Log(Logger.Level.Debug, $"Updating sequence number");
-                        // msg_seqno too high
+                    case BadMessageErrorCodes.MessageSequenceTooHigh:
+                        Logger.Log(Logger.Level.Debug, $"Decrementing sequence number");
                         State.Sequence -= 16;
                         break;
-                    case 34:
-                        // An even msg_seqno expected (irrelevant message), but odd received
-                        var sad34 = new Exception("The message was rejected by the server for having an invalid squence number.  This is not your fault.  Please contact a dev to have this issue resolved.");
-                        states.ToList().ForEach(x => {
-                            Logger.Log(Logger.Level.Debug, $"Throwing exception on the message {x.MessageID} - {x.Request["_"]}");
-                            x.Response.TrySetException(sad34);
-                            SendQueue.Add(x);
-                        });
-                        throw sad34;
-                    case 35:
-                        // Odd msg_seqno expected (relevant message), but even received.
-                        var sad35 = new Exception("The message was rejected by the server for having an invalid squence number.  This is not your fault.  Please contact a dev to have this issue resolved.");
-                        states.ToList().ForEach(x => {
-                            Logger.Log(Logger.Level.Debug, $"Throwing exception on the message {x.MessageID} - {x.Request["_"]}");
-                            x.Response.TrySetException(sad35);
-                            SendQueue.Add(x);
-                        });
-                        throw sad35;
-                    case 48:
-                        // bad_server_salt
-                        // handled elsewhere
-                        Logger.Log(Logger.Level.Debug, $"Bad salt, what now?  Does salt lose its flavor?");
+                    case BadMessageErrorCodes.MessageIdNotEven:
+                        // An even msg_seqno expected (irrelevant message), but odd received.
+                        ThrowExceptionOn(states, new Exception("The message was rejected by the server for having an odd sequence number.  This is not your fault.  Please contact a dev to have this issue resolved."));
                         break;
-                    case 64:
-                        // Invalid container.
+                    case BadMessageErrorCodes.MessageIdNotOdd:
+                        // Odd msg_seqno expected (relevant message), but even received.
+                        ThrowExceptionOn(states, new Exception("The message was rejected by the server for having an even sequence number.  This is not your fault.  Please contact a dev to have this issue resolved."));
+                        break;
+                    case BadMessageErrorCodes.BadServerSalt:
+                        // handled elsewhere
+                        Logger.Log(Logger.Level.Debug, $"The message was rejected by the server as we used an invalid salt.  This is not your fault.  Please contact a dev to have this issue resolved.");
+                        break;
+                    case BadMessageErrorCodes.InvalidContainer:
                         // So, we could just disable batch sending of messages, but likely the code should just be updated
-                        var sad64 = new Exception("The message was rejected by the server for having an invalid container.  This is not your fault.  Please contact a dev to have this issue resolved.");
-                        states.ToList().ForEach(x => {
-                            Logger.Log(Logger.Level.Debug, $"Throwing exception on the message {x.MessageID} - {x.Request["_"]}");
-                            x.Response.TrySetException(sad64);
-                            SendQueue.Add(x);
-                        });
-                        throw sad64;
+                        ThrowExceptionOn(states, new Exception("The message was rejected by the server for having an invalid container.  This is not your fault.  Please contact a dev to have this issue resolved."));
+                        break;
                     default:
-                        var sad = new Exception($"The message was rejected by the server with error code {(int)Message["body"]["error_code"]}.  This is not your fault.  Please contact a dev to have this issue resolved.");
-                        states.ToList().ForEach(x => {
-                            Logger.Log(Logger.Level.Debug, $"Throwing exception on the message {x.MessageID} - {x.Request["_"]}");
-                            x.Response.TrySetException(sad);
-                            SendQueue.Add(x);
-                        });
-                        throw sad;
+                        ThrowExceptionOn(states, new Exception($"The message was rejected by the server with error code {(int)message["body"]["error_code"]}.  This is not your fault.  Please contact a dev to have this issue resolved."));
+                        break;
                 }
 
                 // Messages are to be re-sent once we've corrected the issue
-                states.ToList().ForEach(x => {
-                    var ID = x.ContainerID == -1L ? $"{x.MessageID}" : $"{x.ContainerID}:{x.MessageID}";
-                    Logger.Log(Logger.Level.Debug, $"Requeuing {ID} - {x.Request["_"]}");
-                    SendQueue.Add(x);
-                });
+                foreach (var state in states)
+                {
+                    var id = state.ContainerID == -1L ? $"{state.MessageID}" : $"{state.ContainerID}:{state.MessageID}";
+                    Logger.Log(Logger.Level.Debug, $"Requeuing {id} - {state.Request["_"]}");
+                    SendQueue.Add(state);
+                }
             }
             catch (Exception ex)
             {
@@ -680,20 +703,21 @@ namespace GlassTL.Telegram.Network
 
             return true;
         }
-        private bool ProcessFutureSalts(TLObject Message)
+        private bool ProcessFutureSalts(TLObject message)
         {
             try
             {
                 Logger.Log(Logger.Level.Debug, $"Handling future salts update");
 
-                var states = GetStatesByID((long)Message["body"]["req_msg_id"])
-                    ?? throw new Exception($"A message or container with id { (long)Message["body"]["req_msg_id"] } could not found.  Skipping.");
+                var states = GetStatesByID((long)message["body"]["req_msg_id"])
+                    ?? throw new Exception($"A message or container with id {(long)message["body"]["req_msg_id"]} could not found.  Skipping.");
 
-                states.ToList().ForEach(x => {
-                    var ID = x.ContainerID == -1L ? $"{x.MessageID}" : $"{x.ContainerID}:{x.MessageID}";
-                    Logger.Log(Logger.Level.Debug, $"Resolving {ID} - {x.Request["_"]}");
-                    x.Response.SetResult(new TLObject(Message["body"]["result"]));
-                });
+                foreach (var state in states)
+                {
+                    var id = state.ContainerID == -1L ? $"{state.MessageID}" : $"{state.ContainerID}:{state.MessageID}";
+                    Logger.Log(Logger.Level.Debug, $"Resolving {id} - {state.Request["_"]}");
+                    state.Response.SetResult(new TLObject(message["body"]["result"]));
+                }
 
                 // ToDo: Add to state on a timer so that we can automatically switch.
             }
@@ -712,18 +736,18 @@ namespace GlassTL.Telegram.Network
 
                 var PackedData = Message["body"]["packed_data"];
 
-                if (PackedData.Type != JTokenType.Bytes)
+                if (PackedData.InternalType != JTokenType.Bytes)
                 {
-                    throw new Exception($"Expected raw bytes, but got {PackedData.Type.ToString()}");
+                    throw new Exception($"Expected raw bytes, but got {PackedData.InternalType}");
                 }
 
                 using (var memory = new MemoryStream())
-                using (var packedStream = new MemoryStream((byte[])PackedData, false))
+                using (var packedStream = new MemoryStream(PackedData, false))
                 using (var zipStream = new GZipStream(packedStream, CompressionMode.Decompress))
                 using (var compressedReader = new BinaryReader(memory))
                 {
                     zipStream.CopyTo(memory);
-                    Message["body"] = TLObject.Deserialize(memory.ToArray());
+                    Message["body"] = TLObject.Deserialize(compressedReader);
                 }
 
                 return await ProcessUpdate(Message);
@@ -735,15 +759,20 @@ namespace GlassTL.Telegram.Network
 
             return true;
         }
-        private bool ProcessMessageContainer(TLObject Message)
+        private async Task<bool> ProcessMessageContainer(TLObject Message)
         {
             try
             {
                 Logger.Log(Logger.Level.Debug, $"Handling message container update");
 
-                return Message["body"]["messages"]
-                    .Select(async (x) => await ProcessUpdate(new TLObject(x)))
-                    .All(x => true);
+                var result = false;
+
+                foreach (var asdf in Message["body"].GetAs<JToken>("messages"))
+                {
+                    result = result || await ProcessUpdate(new TLObject(asdf));
+                }
+
+                return result;
             }
             catch (Exception ex)
             {
@@ -795,9 +824,9 @@ namespace GlassTL.Telegram.Network
                 Logger.Log(Logger.Level.Info, $"Processing message resend request");
 
                 // Requeue the message(s) that triggered the error
-                var StatesToResend = Message["body"]["msg_ids"].Select(x =>
+                var StatesToResend = Message["body"].GetAs<long[]>("msg_ids").Select(x =>
                 {
-                    var results = GetStatesByID((long)x);
+                    var results = GetStatesByID(x);
 
                     if (results == null)
                     {
@@ -961,5 +990,16 @@ namespace GlassTL.Telegram.Network
         }
         #endregion
 
+        private void ThrowExceptionOn(IEnumerable<RequestState> states, Exception exception)
+        {
+            foreach (var state in states)
+            {
+                Logger.Log(Logger.Level.Debug, $"Throwing exception on the message {state.MessageID} - {state.Request["_"]}");
+                state.Response.TrySetException(exception);
+                SendQueue.Add(state);
+            }
+
+            throw exception;
+        }
     }
 }

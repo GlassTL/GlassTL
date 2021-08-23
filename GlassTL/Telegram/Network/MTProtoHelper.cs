@@ -7,9 +7,13 @@ using System.Security.Cryptography;
 using GlassTL.Telegram.MTProto;
 using GlassTL.Telegram.MTProto.Crypto;
 using GlassTL.Telegram.Utils;
+using GlassTL.Telegram.Network.Authentication;
+using GlassTL.Telegram.MTProto.Crypto.AES;
 
 namespace GlassTL.Telegram.Network
 {
+    using Aes = MTProto.Crypto.AES.Aes;
+
     /// <summary>
     /// Contains all the logic for encrypting/decrypting messages, etc
     /// </summary>
@@ -130,18 +134,18 @@ namespace GlassTL.Telegram.Network
             // Being substr(what, offset, length); x = 0 for client
             // "msg_key_large = SHA256(substr(auth_key, 88+x, 32) + pt + padding)"
             // "msg_key = substr (msg_key_large, 8, 16)"
-            MessageKey = sha.ComputeHash(AuthInfo.AuthKey.Key
+            MessageKey = sha.ComputeHash(AuthInfo.AuthKey.GetKey()
                 .Skip(88).Take(32)
                 .Concat(data)
                 .ToArray())
                 .Skip(8).Take(16)
                 .ToArray();
 
-            (var AES_Key, var AES_IV) = CalcKey(AuthInfo.AuthKey.Key, MessageKey, true);
+            (var AES_Key, var AES_IV) = CalcKey(AuthInfo.AuthKey.GetKey(), MessageKey, true);
 
-            return BitConverter.GetBytes(AuthInfo.AuthKey.KeyID)
+            return BitConverter.GetBytes(AuthInfo.AuthKey.KeyId)
                 .Concat(MessageKey)
-                .Concat(AES.EncryptIGE(data, AES_Key, AES_IV))
+                .Concat(Aes.EncryptIge(data, AES_Key, AES_IV))
                 .ToArray();
         }
 
@@ -150,26 +154,24 @@ namespace GlassTL.Telegram.Network
         /// </summary>
         public TLObject DecryptMessageData(byte[] body, bool client = false)
         {
-            if (body.Length < 8)
-                throw new Exception("Cannot decrypt a message of 8 bytes.");
+            if (body.Length < 8) throw new Exception("Cannot decrypt a message of 8 bytes.");
 
             using (var memory = new MemoryStream(body))
             using (var reader = new BinaryReader(memory))
             using (var sha = new SHA256Managed())
             {
                 var serverKeyID = reader.ReadUInt64();
-                if (serverKeyID != AuthInfo.AuthKey.KeyID)
-                    throw new Exception($"Server replied with an invalid auth key: {serverKeyID}");
+                if (serverKeyID != AuthInfo.AuthKey.KeyId) throw new Exception($"Server replied with an invalid auth key: {serverKeyID}");
 
                 var MessageKey = reader.ReadBytes(16);
 
-                (var AES_Key, var AES_ID) = CalcKey(AuthInfo.AuthKey.Key, MessageKey, client);
+                (var AES_Key, var AES_ID) = CalcKey(AuthInfo.AuthKey.GetKey(), MessageKey, client);
 
-                body = AES.DecryptIGE(reader.ReadBytes(body.Length - 24), AES_Key, AES_ID);
+                body = Aes.DecryptIge(reader.ReadBytes(body.Length - 24), AES_Key, AES_ID);
 
                 // https://core.telegram.org/mtproto/security_guidelines
                 // Sections "checking sha256 hash" and "message length"
-                var SHAHash = sha.ComputeHash(AuthInfo.AuthKey.Key
+                var SHAHash = sha.ComputeHash(AuthInfo.AuthKey.GetKey()
                     .Skip(client ? 88 : 96).Take(32)
                     .Concat(body)
                     .ToArray());
@@ -188,9 +190,17 @@ namespace GlassTL.Telegram.Network
             using (var memory = new MemoryStream(body))
             using (var reader = new BinaryReader(memory))
             {
+                //Salt = LongUtil.Deserialize(reader);
+
                 // The salt could be 0 if we are starting anew and haven't received one yet
-                if (Salt != LongUtil.Deserialize(reader) && Salt != 0)
-                    throw new Exception("The salt could not be validated");
+                var serverSalt = LongUtil.Deserialize(reader);
+                if (Salt != serverSalt && Salt != 0)
+                {
+                    // BAD.  We shouldn't do this
+                    Salt = serverSalt;
+                    Console.WriteLine("Overrode Server Salt!!!!!");
+                }
+                    //throw new Exception("The salt could not be validated");
 
                 if (ID != LongUtil.Deserialize(reader))
                     throw new Exception("The session ID could not be validated");
@@ -198,19 +208,20 @@ namespace GlassTL.Telegram.Network
                 remote_msg_id   = LongUtil.Deserialize(reader);
                 // ToDo: Check sequence_number
                 remote_sequence = IntegerUtil.Deserialize(reader);
-                RawObject = reader.ReadBytes(IntegerUtil.Deserialize(reader));
-
-                obj = TLObject.Deserialize(RawObject);
+                int size = IntegerUtil.Deserialize(reader);
+                obj = TLObject.Deserialize(reader);
             }
 
-            return new TLObject(JToken.FromObject(new
+            var ret = new TLObject(JToken.FromObject(new
             {
-                _      = "Message",
+                _ = "Message",
                 msg_id = remote_msg_id,
-                seqno  = remote_sequence,
-                bytes  = RawObject,
-                body   = JToken.Parse(obj.ToString())
+                seqno = remote_sequence,
+                bytes = RawObject,
+                body = (JToken)obj
             }));
+
+            return ret;
         }
 
         /// <summary>
@@ -220,6 +231,21 @@ namespace GlassTL.Telegram.Network
         /// <returns></returns>
         public long GetNewMessageID()
         {
+            /*
+             * A (time-dependent) 64-bit number used uniquely to identify a message within a session.
+             *   
+             * Client message identifiers are divisible by 4.
+             * Server message identifiers modulo 4 = 1 if the message is a response to a client message, and 3 otherwise.
+             * 
+             * Both Client and Server message identifiers must increase monotonically (within a single session).
+             * and must approximately equal unixtime*2^32. This way, a message identifier points to the approximate moment in time the message was created.
+             * 
+             * A message is rejected over 300 seconds after it is created or 30 seconds before it is created (this is needed to protect from replay attacks).
+             * 
+             * In this situation, it must be re-sent with a different identifier (or placed in a container with a higher identifier). The identifier of a message container must be strictly greater than those of its nested messages.
+             *
+             * Important: to counter replay-attacks the lower 32 bits of msg_id passed by the client must not be empty and must present a fractional part of the time point when the message was created.
+             */
             long time = Convert.ToInt64((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds);
             long newMessageId = ((time / 1000 + AuthInfo.TimeOffset) << 32) | ((time % 1000) << 22) | ((long)Helpers.GenerateRandomInt(524288) << 2); // 2^19
             // [ unix timestamp : 32 bit] [ milliseconds : 10 bit ] [ buffer space : 1 bit ] [ random : 19 bit ] [ msg_id type : 2 bit ] = [ msg_id : 64 bit ]
@@ -290,7 +316,7 @@ namespace GlassTL.Telegram.Network
                     else
                     {
                         BoolUtil.Serialize(true, writer);
-                        BytesUtil.Serialize(AuthInfo.AuthKey.Key, writer);
+                        BytesUtil.Serialize(AuthInfo.AuthKey.GetKey(), writer);
                     }
 
                     IntegerUtil.Serialize(AuthInfo.TimeOffset, writer);

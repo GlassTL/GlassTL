@@ -1,12 +1,14 @@
-﻿using System;
-using System.Linq;
-using System.Windows.Forms;
-using GlassTL.Telegram;
-using GlassTL.Telegram.MTProto;
-using Newtonsoft.Json.Linq;
-
-namespace GlassTL.Examples
+﻿namespace GlassTL.Examples
 {
+    using System;
+    using System.Linq;
+    using System.Security;
+    using System.Windows.Forms;
+    using Telegram;
+    using Telegram.MTProto;
+    using Newtonsoft.Json.Linq;
+    using EventArgs;
+
     public partial class MainForm : Form
     {
         private TelegramClient botClient = null;
@@ -18,7 +20,7 @@ namespace GlassTL.Examples
             Logger.LoggerHandlerManager
                 .AddHandler(new ConsoleLoggerHandler());
 
-            botClient = new TelegramClient();
+            botClient = new TelegramClient(159644, "18ebfbb006ecdff8aeeb57ba608cd4df");
 
             botClient.PhoneNumberRequestedEvent += BotClient_PhoneNumberRequestedEventHandler;
             botClient.AuthCodeRequestedEvent += BotClient_AuthCodeRequestedEventHandler;
@@ -53,30 +55,30 @@ namespace GlassTL.Examples
                 var FromId = 0;
                 var ToId = 0;
 
-                if (ToPeer.Value<string>("_") == "channel")
+                if (ToPeer.GetAs<string>("_") == "channel")
                 {
-                    ToName = ToPeer.Value<string>("title");
+                    ToName = ToPeer.GetAs<string>("title");
                 }
                 else
                 {
-                    ToName = $"{ToPeer.Value<string>("first_name")} {ToPeer.Value<string>("last_name")}".Trim();
+                    ToName = $"{ToPeer.GetAs<string>("first_name")} {ToPeer.GetAs<string>("last_name")}".Trim();
                 }
 
-                FromName = FromUser.Type != JTokenType.Null
-                    ? $"{FromUser.Value<string>("first_name")} {FromUser.Value<string>("last_name")}".Trim()
+                FromName = FromUser.InternalType != JTokenType.Null
+                    ? $"{FromUser.GetAs<string>("first_name")} {FromUser.GetAs<string>("last_name")}".Trim()
                     : default;
                 if (string.IsNullOrEmpty(FromName)) FromName = "No-Name";
                 if (string.IsNullOrEmpty(ToName)) ToName = "No-Name";
-                FromId = FromUser.Type != JTokenType.Null
-                    ? FromUser.Value<int>("id")
+                FromId = FromUser.InternalType != JTokenType.Null
+                    ? FromUser.GetAs<int>("id")
                     : default;
-                ToId = ToPeer.Value<int>("id");
+                ToId = ToPeer.GetAs<int>("id");
 
-                AddToLog($"{FromName} ({FromId}) -> {ToName} ({ToId}) >>> {e.TLObject["message"].Value<string>("message")}");
+                AddToLog($"{FromName} ({FromId}) -> {ToName} ({ToId}) >>> {e.TLObject["message"].GetAs<string>("message")}");
 
-                if (FromUser.Type == JTokenType.Null) return;
-                if ((bool)e.TLObject["message"]["out"]) return;
-                if (!(new long[] { 876650892, 960462, 295152997, 976906477 }).Contains((long)FromUser["id"])) return;
+                if (FromUser.InternalType == JTokenType.Null) return;
+                if (e.TLObject["message"].GetAs<bool>("out")) return;
+                if (!(new long[] { 876650892, 960462, 295152997, 976906477 }).Contains(FromUser["id"])) return;
                 //if (!(new long[] { 848427085, 234480941, 313742192, 537790376 }).Contains(FromId)) return;
 
                 TLObject ShouldReplyTo;
@@ -89,7 +91,7 @@ namespace GlassTL.Examples
                     ShouldReplyTo = new TLObject(ToPeer);
                 }
 
-                switch ((string)e.TLObject["message"]["message"])
+                switch (e.TLObject["message"].GetAs<string>("message"))
                 {
                     case ";ping":
                         var first = DateTime.Now;
@@ -138,7 +140,7 @@ namespace GlassTL.Examples
             changeMethodLinkLabel.Enabled = true;
 
             AddToLog(e.ToString());
-            MessageBox.Show((string)e.TLObject["type"]["_"]);
+            MessageBox.Show(e.TLObject["type"].GetAs<string>("_"));
         }
         private void BotClient_FirstNameRequestedEventHandler(object sender, TLObjectEventArgs e)
         {
@@ -212,13 +214,13 @@ namespace GlassTL.Examples
         }
         private void ViewHintLinkLabel_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            if (passwordTextBox.Tag is null || !(passwordTextBox.Tag is string) || (passwordTextBox.Tag as string).Length == 0)
+            if (passwordTextBox.Tag is not string tag || tag.Length == 0)
             {
                 MessageBox.Show("A password is required but there is no hint supplied.");
             }
             else
             {
-                MessageBox.Show(passwordTextBox.Tag as string, "GlassTL Userbot", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(tag, "GlassTL Userbot", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
@@ -257,7 +259,12 @@ namespace GlassTL.Examples
         }
         private async void VerifyPasswordButton_Click(object sender, EventArgs e)
         {
-            if (await botClient.MakeAuthWithPasswordAsync(passwordTextBox.Text))
+            // Note that we really should have a custom control, but I'm lazy and this is for testing anyway
+            // ToDo: Enhance with custom SecurePasswordTextBox or something...
+            var result = new SecureString();
+            foreach (char c in passwordTextBox.Text.ToCharArray()) result.AppendChar(c);
+
+            if (await botClient.MakeAuthWithPasswordAsync(result))
             {
                 AddToLog("Password sent successfully");
             }

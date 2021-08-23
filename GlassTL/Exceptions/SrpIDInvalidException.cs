@@ -1,20 +1,20 @@
-﻿using System;
-using System.Runtime.Serialization;
-
-namespace GlassTL.Telegram.Exceptions
+﻿namespace GlassTL.Exceptions
 {
+    using System;
+    using System.Runtime.Serialization;
+
     /// <summary>
-    /// Occurs when connection to Telegram Servers fails.  See InnerException for more details
+    /// Typically occurs when dealing with a cloud password and the SRP ID expired.  This SHOULD be handled by GlassTL transparently.
     /// </summary>
     [Serializable]
-    public class SrpIDInvalidException : Exception, ISerializable
+    public class SrpIdInvalidException : Exception
     {
-        public SrpIDInvalidException(string message) : base(message) { }
+        public SrpIdInvalidException(string message) : base(message) { }
 
-        public SrpIDInvalidException(string message, Exception innerException) : base(message, innerException) { }
+        public SrpIdInvalidException(string message, Exception innerException) : base(message, innerException) { }
 
-        public SrpIDInvalidException() { }
+        public SrpIdInvalidException() { }
 
-        protected SrpIDInvalidException(SerializationInfo serializationInfo, StreamingContext streamingContext) : base(serializationInfo, streamingContext) { }
+        protected SrpIdInvalidException(SerializationInfo serializationInfo, StreamingContext streamingContext) : base(serializationInfo, streamingContext) { }
     }
 }

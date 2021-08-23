@@ -1,11 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Security.Cryptography;
-
-namespace GlassTL.Telegram.MTProto.Crypto
+﻿namespace GlassTL.Telegram.MTProto.Crypto
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Security.Cryptography;
+
     /// <summary>
     /// Implements a 32-bit CRC hash algorithm
     /// </summary>
@@ -17,85 +15,57 @@ namespace GlassTL.Telegram.MTProto.Crypto
     /// </remarks>
     public sealed class Crc32 : HashAlgorithm
     {
-        public const uint DefaultPolynomial = 0xedb88320u;
-        public const uint DefaultSeed = 0xffffffffu;
+        private const uint DefaultPolynomial = 0xedb88320u;
+        private const uint DefaultSeed = 0xffffffffu;
 
-        static uint[] defaultTable;
+        private static uint[] _defaultTable;
 
-        readonly uint seed;
-        readonly uint[] table;
-        uint hash;
+        private readonly uint _seed;
+        private readonly uint[] _table;
+        private uint _hash;
 
-        public Crc32() : this(DefaultPolynomial, DefaultSeed)
+        public Crc32() : this(DefaultPolynomial, DefaultSeed) { }
+
+        private Crc32(uint polynomial, uint seed)
         {
-        }
+            if (!BitConverter.IsLittleEndian) throw new PlatformNotSupportedException("Not supported on Big Endian processors");
 
-        public Crc32(uint polynomial, uint seed)
-        {
-            if (!BitConverter.IsLittleEndian)
-            {
-                throw new PlatformNotSupportedException("Not supported on Big Endian processors");
-            }
-
-            table = InitializeTable(polynomial);
-            this.seed = hash = seed;
+            _table = InitializeTable(polynomial);
+            _seed = _hash = seed;
         }
 
         public static int Compute(byte[] buffer, int index, int count)
         {
-            if (buffer == null)
-            {
-                throw new ArgumentNullException(nameof(buffer));
-            }
-            else if (buffer.Length < index)
-            {
-                throw new ArgumentOutOfRangeException(nameof(index));
-            }
-            else if (buffer.Length - index < count)
-            {
-                throw new ArgumentOutOfRangeException(nameof(count));
-            }
+            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+            if (buffer.Length < index) throw new ArgumentOutOfRangeException(nameof(index));
+            if (buffer.Length - index < count) throw new ArgumentOutOfRangeException(nameof(count));
 
-            return (int)Compute(buffer.Skip(index).Take(count).ToArray());
+            var raw = new byte[count];
+            Buffer.BlockCopy(buffer, index, raw, 0, count);
+
+            return (int)Compute(raw);
         }
 
-        public override void Initialize()
-        {
-            hash = seed;
-        }
+        public override void Initialize() => _hash = _seed;
 
-        protected override void HashCore(byte[] array, int ibStart, int cbSize)
-        {
-            hash = CalculateHash(table, hash, array, ibStart, cbSize);
-        }
+        protected override void HashCore(byte[] array, int ibStart, int cbSize) => _hash = CalculateHash(_table, _hash, array, ibStart, cbSize);
 
         protected override byte[] HashFinal()
         {
-            var hashBuffer = UintToBigEndianBytes(~hash);
+            var hashBuffer = UintToBigEndianBytes(~_hash);
             HashValue = hashBuffer;
             return hashBuffer;
         }
 
-        public override int HashSize { get; } = 32;
+        public override int HashSize => 32;
 
-        public static uint Compute(byte[] buffer)
-        {
-            return Compute(DefaultSeed, buffer);
-        }
+        private static uint Compute(byte[] buffer) => Compute(DefaultSeed, buffer);
+        private static uint Compute(uint seed, byte[] buffer) => Compute(DefaultPolynomial, seed, buffer);
+        private static uint Compute(uint polynomial, uint seed, byte[] buffer) => ~CalculateHash(InitializeTable(polynomial), seed, buffer, 0, buffer.Length);
 
-        public static uint Compute(uint seed, byte[] buffer)
+        private static uint[] InitializeTable(uint polynomial)
         {
-            return Compute(DefaultPolynomial, seed, buffer);
-        }
-
-        public static uint Compute(uint polynomial, uint seed, byte[] buffer)
-        {
-            return ~CalculateHash(InitializeTable(polynomial), seed, buffer, 0, buffer.Length);
-        }
-
-        static uint[] InitializeTable(uint polynomial)
-        {
-            if (polynomial == DefaultPolynomial && defaultTable != null) return defaultTable;
+            if (polynomial == DefaultPolynomial && _defaultTable != null) return _defaultTable;
 
             var createTable = new uint[256];
 
@@ -118,12 +88,12 @@ namespace GlassTL.Telegram.MTProto.Crypto
                 createTable[i] = entry;
             }
 
-            if (polynomial == DefaultPolynomial) defaultTable = createTable;
+            if (polynomial == DefaultPolynomial) _defaultTable = createTable;
 
             return createTable;
         }
 
-        static uint CalculateHash(uint[] table, uint seed, IList<byte> buffer, int start, int size)
+        private static uint CalculateHash(uint[] table, uint seed, IList<byte> buffer, int start, int size)
         {
             var hash = seed;
 
@@ -135,7 +105,7 @@ namespace GlassTL.Telegram.MTProto.Crypto
             return hash;
         }
 
-        static byte[] UintToBigEndianBytes(uint value)
+        private static byte[] UintToBigEndianBytes(uint value)
         {
             var result = BitConverter.GetBytes(value);
 

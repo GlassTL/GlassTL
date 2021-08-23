@@ -1,13 +1,13 @@
-﻿using System;
-using System.Runtime.Serialization;
-
-namespace GlassTL.Telegram.Exceptions
+﻿namespace GlassTL.Exceptions
 {
+    using System;
+    using System.Runtime.Serialization;
+
     /// <summary>
     /// Occurs when connection to Telegram Servers fails.  See InnerException for more details
     /// </summary>
     [Serializable]
-    public class AuthRestartException : Exception, ISerializable
+    public class AuthRestartException : Exception
     {
         public AuthRestartException(string message) : base(message) { }
 

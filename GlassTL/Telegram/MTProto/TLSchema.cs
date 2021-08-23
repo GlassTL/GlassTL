@@ -1,58 +1,54 @@
-﻿using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using System;
-using System.Collections.Generic;
-using System.Dynamic;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-
-namespace GlassTL.Telegram.MTProto
+﻿namespace GlassTL.Telegram.MTProto
 {
-    class TLSchema : DynamicObject, IDisposable // ToDo: Also add support for IEnumerable
+    using Newtonsoft.Json;
+    using Newtonsoft.Json.Linq;
+    using System;
+    using System.Collections.Generic;
+    using System.Dynamic;
+    using System.IO;
+    using System.Linq;
+    using System.Reflection;
+
+    public class TLSchema : DynamicObject // ToDo: Also add support for IEnumerable
     {
         /// <summary>
         /// The schema as read from the layer schema resource file
         /// </summary>
-        private static JObject _schema = null;
+        private static JObject _schema;
         /// <summary>
-        /// Reads and parses the schema data, if not done already, and returns the parsed data 
+        /// The reserved methods as read from the layer schema resource file
         /// </summary>
+        private static string[] _reservedMethods;
         /// <summary>
-        /// Reads and parses the schema data, if not done already, and returns the parsed data 
+        /// Reads and parses the schema data, if not done already, and returns the parsed data
+        /// 
+        /// You likely don't want to use this...
         /// </summary>
-        public static JObject Schema
-        {
-            get
-            {
+        public static JObject Schema {
+            get {
                 if (_schema == null)
                 {
-                    JsonTextReader reader = new JsonTextReader(new StreamReader(
-                        Assembly.GetExecutingAssembly().GetManifestResourceStream(Assembly.GetExecutingAssembly().GetManifestResourceNames().Single(
-                            str => str.EndsWith("schema.json")
-                        ))
-                    ));
-
-                    _schema = (JObject)JToken.ReadFrom(reader);
+                    foreach (var name in Assembly.GetExecutingAssembly().GetManifestResourceNames())
+                    {
+                        if (name.EndsWith("schema.json"))
+                        {
+                            _schema = (JObject)JToken.ReadFrom(new JsonTextReader(new StreamReader(
+                                Assembly.GetExecutingAssembly().GetManifestResourceStream(name)
+                            )));
+                        }
+                    }
                 }
                 
-                return _schema;
+                return _schema ?? throw new Exception("Cannot load the schema json file.");
             }
         }
 
-        public TLSchema()
-        {
-        }
-
-        public int Layer()
-        {
-            return (int)Schema["schema_info"]["layer"];
-        }
+        private static int Layer() => (int)Schema["schema_info"]?["layer"];
 
         /// <summary>
         /// Contains all previous methods.
         /// 
-        /// NOTE: This intentionally does not contain the last method so that a user can
+        /// NOTE: This intentionally does not contain the last method so that users can
         /// do something like this:
         /// 
         /// dynamic schema = new <see cref="TLSchema"/>();
@@ -62,13 +58,19 @@ namespace GlassTL.Telegram.MTProto
         ///     messages.deleteMessages(...)
         /// }
         /// </summary>
-        internal List<string> methodStack = new List<string>();
+        private List<string> _methodStack = new();
         /// <summary>
         /// Contains a static list of methods that notate groups of members.
         /// 
         /// NOTE: This is static and does not update with the schema.
         /// </summary>
-        internal string[] ReservedMethods => Schema["schema_info"]["reserved"].ToObject<string[]>();
+        private static IEnumerable<string> ReservedMethods
+        {
+            get
+            {
+                return _reservedMethods ??= Schema["schema_info"]?["reserved"]?.ToObject<string[]>();
+            }
+        }
 
         /// <summary>
         /// Handles members that are not being invoked.
@@ -94,12 +96,11 @@ namespace GlassTL.Telegram.MTProto
             // If there's more to come, return a NEW instance so we can continue parsing while
             // retaining all previous information. and to keep the methods separate which allows
             // this instance to remain free of junk from previous calls.
-            if (ReservedMethods.Contains(binder.Name.ToLower()))
+            if (ReservedMethods.Any(reservedMethod => reservedMethod == binder.Name.ToLower()))
             {
-                // Create a new instance of this member while reserving the prior ones
-                result = new TLSchema()
+                result = new TLSchema
                 {
-                    methodStack = new List<string>(methodStack) { binder.Name }
+                    _methodStack = new List<string>(_methodStack) { binder.Name }
                 };
 
                 // Since the method is reserved, we need to continue before creating the object
@@ -108,7 +109,7 @@ namespace GlassTL.Telegram.MTProto
 
             // Attempt to parse the item for return.
             // NOTE: We are returning an item here in case it's a constructor with no methods.
-            result = TLObject.BuildTLObject($"{string.Join(".", methodStack)}.{binder.Name}".Trim('.'));
+            result = TLObject.BuildTLObject($"{string.Join(".", _methodStack)}.{binder.Name}".Trim('.'));
 
             // Return whether or not the TLObject was found
             return result != null;
@@ -130,51 +131,15 @@ namespace GlassTL.Telegram.MTProto
         public override bool TryInvokeMember(InvokeMemberBinder binder, object[] args, out object result)
         {
             // Ensure that there will something so that we can pass args[0]
-            if (args    == null) args    = new object[1];
-            if (args[0] == null) args[0] = new object();
+            args ??= new object[1];
+            args[0] ??= new object();
 
-            //var asdf = //
             // Attempt to parse the item for return.
             // NOTE: All args besides the first are ignored
-            result = TLObject.BuildTLObject($"{string.Join(".", methodStack)}.{binder.Name}".Trim('.'), args[0]);
+            result = TLObject.BuildTLObject($"{string.Join(".", _methodStack)}.{binder.Name}".Trim('.'), args[0]);
 
             // Return whether or not the TLObject was found
             return result != null;
         }
-        
-        #region IDisposable Support
-        /// <summary>
-        /// Adds the ability to detect redundant calls.  Don't need to dispose twice.
-        /// </summary>
-        private bool disposedValue = false;
-
-        /// <summary>
-        /// This code added to correctly implement the disposable pattern.
-        /// </summary>
-        protected virtual void Dispose(bool disposing)
-        {
-            // Only continue if we aren't already disposing
-            if (!disposedValue)
-            {
-                disposedValue = true;
-
-                if (disposing)
-                {
-                    _schema = null;
-                }
-            }
-        }
-
-        /// <summary>
-        /// This code added to correctly implement the disposable pattern.
-        /// </summary>
-        void IDisposable.Dispose()
-        {
-            // NOTE: Do not change this code.
-            // If you added things and need to clean it up, 
-            // put your code in the Dispose(bool disposing) above.
-            Dispose(true);
-        }
-        #endregion
     }
 }

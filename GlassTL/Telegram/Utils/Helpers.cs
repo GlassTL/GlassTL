@@ -8,21 +8,22 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using GlassTL.Telegram.MTProto;
-using GlassTL.Telegram.MTProto.Crypto;
 using BigMath;
 using System.Runtime.CompilerServices;
+using System.Security;
+using System.Runtime.InteropServices;
 
 namespace GlassTL.Telegram.Utils
 {
     public static class Helpers
     {
-        private static readonly Random random = new Random();
+        private static readonly Random random = new();
         private static long lastMessageId = 0;
         private static readonly char[][] LookupTableLower = Enumerable.Range(0, 256).Select(x => x.ToString("x2").ToCharArray()).ToArray();
         private static readonly char[][] LookupTableUpper = Enumerable.Range(0, 256).Select(x => x.ToString("X2").ToCharArray()).ToArray();
 
         /// <summary>
-        /// Works just like the % (modulus) operator, only returns always a postive number.
+        /// Works just like the % (modulus) operator, but it returns always a postive number.
         /// </summary>
         public static int PositiveMod(int a, int b)
         {
@@ -33,9 +34,9 @@ namespace GlassTL.Telegram.Utils
 
         public static long GetNewMessageId(int timeOffset = 0)
         {
-            long time = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
+            var time = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
 
-            long newMessageId = (((time / 1000) + timeOffset) << 32) | ((time % 1000) << 22) | (long)(random.Next(524288) << 2); // 2^19
+            var newMessageId = ((time / 1000 + timeOffset) << 32) | ((time % 1000) << 22) | (long)(random.Next(524288) << 2); // 2^19
             // [ unix timestamp : 32 bit] [ milliseconds : 10 bit ] [ buffer space : 1 bit ] [ random : 19 bit ] [ msg_id type : 2 bit ] = [ msg_id : 64 bit ]
 
             if (lastMessageId >= newMessageId)
@@ -75,6 +76,8 @@ namespace GlassTL.Telegram.Utils
 
         public static byte[] GenerateRandomBytes(int num)
         {
+            if (num == 0) return Array.Empty<byte>();
+
             using var rng = new RNGCryptoServiceProvider();
             var data = new byte[num];
             rng.GetBytes(data);
@@ -146,12 +149,22 @@ namespace GlassTL.Telegram.Utils
         public static byte[] Reverse(this byte[] input)
         {
             if (input == null) return null;
-            byte[] tmp = new byte[input.Length];
-            Array.Copy(input, tmp, input.Length);
+            var tmp = new byte[input.Length];
+            Buffer.BlockCopy(input, 0, tmp, 0, input.Length);
             Array.Reverse(tmp);
             return tmp;
         }
 
+        /// <summary>
+        /// Attempts to invoke delegates on each handler's thread.  If that fails, invokation is done on the local thread.
+        /// </summary>
+        /// <param name="ev">The delegate to invoke</param>
+        /// <param name="args">Arguments being passed to the delegate</param>
+        public static void RaiseEventSafe(this Delegate ev, params object[] args)
+        {
+            RaiseEventSafe(ev, ref args);
+        }
+        
         /// <summary>
         /// Attempts to invoke delegates on each handler's thread.  If that fails, invokation is done on the local thread
         /// </summary>
@@ -193,15 +206,10 @@ namespace GlassTL.Telegram.Utils
             using var timeoutCancellationTokenSource = new CancellationTokenSource();
             var completedTask = await Task.WhenAny(task, Task.Delay(timeout, timeoutCancellationTokenSource.Token));
 
-            if (completedTask == task)
-            {
-                timeoutCancellationTokenSource.Cancel();
-                return await task;  // Very important in order to propagate exceptions
-            }
-            else
-            {
-                throw new TimeoutException("The operation has timed out.");
-            }
+            if (completedTask != task) throw new TimeoutException("The operation has timed out.");
+            
+            timeoutCancellationTokenSource.Cancel();
+            return await task;  // Very important in order to propagate exceptions
         }
         public static async Task<TResult> TimeoutAfter<TResult>(this Task<TResult> task, int timeout)
         {
@@ -213,15 +221,10 @@ namespace GlassTL.Telegram.Utils
             using var timeoutCancellationTokenSource = new CancellationTokenSource();
             var completedTask = await Task.WhenAny(task, Task.Delay(timeout, timeoutCancellationTokenSource.Token));
 
-            if (completedTask == task)
-            {
-                timeoutCancellationTokenSource.Cancel();
-                await task;  // Very important in order to propagate exceptions
-            }
-            else
-            {
-                throw new TimeoutException("The operation has timed out.");
-            }
+            if (completedTask != task) throw new TimeoutException("The operation has timed out.");
+
+            timeoutCancellationTokenSource.Cancel();
+            await task; // Very important in order to propagate exceptions
         }
         public static async Task TimeoutAfter(this Task task, int timeout)
         {
@@ -232,20 +235,21 @@ namespace GlassTL.Telegram.Utils
         {
             // Make sure we only iterate over arrays once
             var list = arrays.ToList();
-
             if (list.Count == 0) return Array.Empty<T>();
 
-            var ret = new T[list.Sum(x => x.Length) + list.Count - 1];
+            // Aggregate() should be faster than Sum(lambda) due to overhead created by Sum
+            var size = list.Aggregate(0, (result, element) => result + element.Length);
+            var ret = new T[size + list.Count - 1];
             var index = 0;
             var first = true;
 
-            list.ForEach(x =>
+            foreach (var array in list)
             {
                 if (!first) ret[index++] = separator;
-                Array.Copy(x, 0, ret, index, x.Length);
-                index += x.Length;
+                Array.Copy(array, 0, ret, index, array.Length);
+                index += array.Length;
                 first = false;
-            });
+            }
 
             return ret;
         }
@@ -253,17 +257,34 @@ namespace GlassTL.Telegram.Utils
         {
             // Make sure we only iterate over arrays once
             var list = arrays.ToList();
-
             if (list.Count == 0) return Array.Empty<T>();
 
-            var ret = new T[list.Sum(x => x.Length)];
+            // Aggregate() should be faster than Sum(lambda) due to overhead created by Sum
+            var size = list.Aggregate(0, (result, element) => result + element.Length);
+            var ret = new T[size];
             var index = 0;
 
-            list.ForEach(x =>
+            foreach (var array in list)
             {
-                Array.Copy(x, 0, ret, index, x.Length);
-                index += x.Length;
-            });
+                Array.Copy(array, 0, ret, index, array.Length);
+                index += array.Length;
+            }
+
+            return ret;
+        }
+
+        public static T[] SubArray<T>(this T[] array, int startIndex)
+        {
+            return SubArray(array, startIndex, array.Length - startIndex);
+        }
+        public static T[] SubArray<T>(this T[] array, int startIndex, int count)
+        {
+            var ret = new T[count];
+
+            for (var i = 0; i < count; i++)
+            {
+                ret[i] = array[startIndex + i];
+            }
 
             return ret;
         }
@@ -277,20 +298,17 @@ namespace GlassTL.Telegram.Utils
         /// <returns><see cref="Int256" /> value.</returns>
         public static Int256 ToInt256(this byte[] bytes, int offset = 0, bool? asLittleEndian = null)
         {
-            if (bytes == null)
-                throw new ArgumentNullException(nameof(bytes));
-            if (bytes.Length == 0)
-                return 0;
-            if (bytes.Length <= offset)
-                throw new InvalidOperationException("Array length must be greater than offset.");
+            if (bytes == null) throw new ArgumentNullException(nameof(bytes));
+            if (bytes.Length == 0) return 0;
+            if (bytes.Length <= offset) throw new InvalidOperationException("Array length must be greater than offset.");
 
-            bool ale = GetIsLittleEndian(asLittleEndian);
+            var ale = GetIsLittleEndian(asLittleEndian);
             EnsureLength(ref bytes, 32, offset, ale);
 
-            ulong a = bytes.ToUInt64(ale ? offset + 24 : offset, ale);
-            ulong b = bytes.ToUInt64(ale ? offset + 16 : offset + 8, ale);
-            ulong c = bytes.ToUInt64(ale ? offset + 8 : offset + 16, ale);
-            ulong d = bytes.ToUInt64(ale ? offset : offset + 24, ale);
+            var a = bytes.ToUInt64(ale ? offset + 24 : offset, ale);
+            var b = bytes.ToUInt64(ale ? offset + 16 : offset + 8, ale);
+            var c = bytes.ToUInt64(ale ? offset + 8 : offset + 16, ale);
+            var d = bytes.ToUInt64(ale ? offset : offset + 24, ale);
 
             return new Int256(a, b, c, d);
         }
@@ -303,18 +321,9 @@ namespace GlassTL.Telegram.Utils
         /// <returns><see cref="Int128" /> value.</returns>
         public static Int128 ToInt128(this byte[] bytes, int offset = 0, bool? asLittleEndian = null)
         {
-            if (bytes == null)
-            {
-                throw new ArgumentNullException(nameof(bytes));
-            }
-            if (bytes.Length == 0)
-            {
-                return 0;
-            }
-            if (bytes.Length <= offset)
-            {
-                throw new InvalidOperationException("Array length must be greater than offset.");
-            }
+            if (bytes == null) throw new ArgumentNullException(nameof(bytes));
+            if (bytes.Length == 0) return 0;
+            if (bytes.Length <= offset) throw new InvalidOperationException("Array length must be greater than offset.");
 
             var ale = GetIsLittleEndian(asLittleEndian);
             EnsureLength(ref bytes, 16, offset, ale);
@@ -343,12 +352,9 @@ namespace GlassTL.Telegram.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long ToInt64(this byte[] bytes, int offset = 0, bool? asLittleEndian = null)
         {
-            if (bytes == null)
-                throw new ArgumentNullException(nameof(bytes));
-            if (bytes.Length == 0)
-                return 0;
-            if (bytes.Length <= offset)
-                throw new InvalidOperationException("Array length must be greater than offset.");
+            if (bytes == null) throw new ArgumentNullException(nameof(bytes));
+            if (bytes.Length == 0) return 0;
+            if (bytes.Length <= offset) throw new InvalidOperationException("Array length must be greater than offset.");
 
             var ale = GetIsLittleEndian(asLittleEndian);
             EnsureLength(ref bytes, 8, offset, ale);
@@ -489,10 +495,7 @@ namespace GlassTL.Telegram.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void ToBytes(this int value, byte[] buffer, int offset = 0, bool? asLittleEndian = null)
         {
-            if (buffer == null)
-            {
-                throw new ArgumentNullException(nameof(buffer));
-            }
+            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
 
             if (asLittleEndian ?? BitConverter.IsLittleEndian)
             {
@@ -614,15 +617,12 @@ namespace GlassTL.Telegram.Utils
         /// <returns>Hexadecimal string representation of the bytes array.</returns>
         public static string ToHexString(this ArraySegment<byte> bytes, bool caps = true, int min = 0, bool spaceEveryByte = false, bool trimZeros = false)
         {
-            int count = bytes.Count;
-            if (count == 0)
-            {
-                return string.Empty;
-            }
+            var count = bytes.Count;
+            if (count == 0 || bytes.Array == null) return string.Empty;
 
-            int strLength = min;
-
-            int bim = 0;
+            var strLength = min;
+            var bim = 0;
+            
             if (trimZeros)
             {
                 bim = count - 1;
@@ -643,10 +643,7 @@ namespace GlassTL.Telegram.Utils
                 strLength = strLength < min ? min : strLength;
             }
 
-            if (strLength == 0)
-            {
-                return "0";
-            }
+            if (strLength == 0) return "0";
 
             int step = 0;
             if (spaceEveryByte)
@@ -669,9 +666,9 @@ namespace GlassTL.Telegram.Utils
                 }
             }
 
-            char[][] lookupTable = caps ? LookupTableUpper : LookupTableLower;
-            int bi = count - 1;
-            int ci = strLength - 1;
+            var lookupTable = caps ? LookupTableUpper : LookupTableLower;
+            var bi = count - 1;
+            var ci = strLength - 1;
             while (bi >= bim)
             {
                 char[] chb = lookupTable[bytes.Array[bytes.Offset + bi--]];
@@ -703,18 +700,18 @@ namespace GlassTL.Telegram.Utils
         /// <param name="pq"></param>
         /// <param name="factorized"></param>
         /// <returns></returns>
-        public static bool FindPQ(byte[] pq, out JToken factorized)
+        public static bool FindPq(byte[] pq, out JToken factorized)
         {
-            var pqL = BitConverter.ToInt64(Reverse(pq), 0);
-            long pqSqrt = (long)Math.Sqrt(pqL), ySqr, y;
+            var pqL = BitConverter.ToInt64(pq.Reverse(), 0);
+            var pqSqrt = (long)Math.Sqrt(pqL);
 
             while (pqSqrt * pqSqrt > pqL) pqSqrt--;
             while (pqSqrt * pqSqrt < pqL) pqSqrt++;
 
             while (true)
             {
-                ySqr = pqSqrt * pqSqrt - pqL;
-                y = (long)Math.Sqrt(ySqr);
+                var ySqr = pqSqrt * pqSqrt - pqL;
+                var y = (long)Math.Sqrt(ySqr);
 
                 while (y * y > ySqr) y--;
                 while (y * y < ySqr) y++;
@@ -743,7 +740,6 @@ namespace GlassTL.Telegram.Utils
                 pqSqrt++;
             }
         }
-
         public static Tuple<string, TLObject[]> ParseEntities(string Message)
         {
             using dynamic schema = new TLSchema();
@@ -785,7 +781,176 @@ namespace GlassTL.Telegram.Utils
 
                 ParsedText += e.InnerText;
             }
-            return new Tuple<string, TLObject[]>(ParsedText, Tags.Count() == 0 ? null : Tags.ToArray());
+            return new Tuple<string, TLObject[]>(ParsedText, !Tags.Any() ? null : Tags.ToArray());
+        }
+
+        /// <summary>
+        /// Determines if two byte arrays contain the same elements.  This is similar to SequenceEquals, but will run much faster
+        /// </summary>
+        /// <param name="input1">The first array</param>
+        /// <param name="input2">The second array</param>
+        /// <returns>True if the two arrays contain the same elements, otherwise false.</returns>
+        public static bool DirectSequenceEquals(this byte[] input1, byte[] input2)
+        {
+            if (input1 == null && input2 == null) return true;
+            if (input1 == null || input2 == null) return false;
+            if (input1.Length != input2.Length) return false;
+
+            return !input1.Where((t, i) => t != input2[i]).Any();
+        }
+
+        public static void UInt32_To_BE(this uint n, byte[] bs) => UInt32_To_BE(n, bs, 0);
+        public static void UInt32_To_BE(uint n, byte[] bs, int off)
+        {
+            bs[off] = (byte)(n >> 24);
+            bs[++off] = (byte)(n >> 16);
+            bs[++off] = (byte)(n >> 8);
+            bs[++off] = (byte)(n);
+        }
+
+        public static uint BE_To_UInt32(this byte[] bs)
+        {
+            var n = (uint)bs[0] << 24;
+            n |= (uint)bs[1] << 16;
+            n |= (uint)bs[2] << 8;
+            n |= bs[3];
+            return n;
+        }
+        public static uint BE_To_UInt32(this byte[] bs, int off)
+        {
+            var n = (uint)bs[off] << 24;
+            n |= (uint)bs[++off] << 16;
+            n |= (uint)bs[++off] << 8;
+            n |= bs[++off];
+            return n;
+        }
+
+        public static ulong BE_To_UInt64(this byte[] bs)
+        {
+            var hi = BE_To_UInt32(bs);
+            var lo = BE_To_UInt32(bs, 4);
+            return ((ulong)hi << 32) | lo;
+        }
+        public static ulong BE_To_UInt64(this byte[] bs, int off)
+        {
+            var hi = BE_To_UInt32(bs, off);
+            var lo = BE_To_UInt32(bs, off + 4);
+            return ((ulong)hi << 32) | lo;
+        }
+
+        public static void UInt64_To_BE(this ulong n, byte[] bs)
+        {
+            UInt32_To_BE((uint)(n >> 32), bs);
+            UInt32_To_BE((uint)(n), bs, 4);
+        }
+        public static void UInt64_To_BE(this ulong n, byte[] bs, int off)
+        {
+            UInt32_To_BE((uint)(n >> 32), bs, off);
+            UInt32_To_BE((uint)(n), bs, off + 4);
+        }
+
+        public static void UInt32_To_LE(this uint n, byte[] bs) => UInt32_To_LE(n, bs, 0);
+        public static void UInt32_To_LE(this uint n, byte[] bs, int off)
+        {
+            bs[off] = (byte)(n);
+            bs[++off] = (byte)(n >> 8);
+            bs[++off] = (byte)(n >> 16);
+            bs[++off] = (byte)(n >> 24);
+        }
+
+        public static uint LE_To_UInt32(this byte[] bs) => LE_To_UInt32(bs, 0);
+        public static uint LE_To_UInt32(this byte[] bs, int off)
+        {
+            var n = (uint)bs[off];
+            n |= (uint)bs[++off] << 8;
+            n |= (uint)bs[++off] << 16;
+            n |= (uint)bs[++off] << 24;
+            return n;
+        }
+
+        public static ulong LE_To_UInt64(this byte[] bs) => LE_To_UInt64(bs, 0);
+        public static ulong LE_To_UInt64(this byte[] bs, int off)
+        {
+            var lo = LE_To_UInt32(bs, off);
+            var hi = LE_To_UInt32(bs, off + 4);
+            return ((ulong)hi << 32) | lo;
+        }
+
+        public static void UInt64_To_LE(this ulong n, byte[] bs)
+        {
+            UInt32_To_LE((uint)(n), bs);
+            UInt32_To_LE((uint)(n >> 32), bs, 4);
+        }
+        public static void UInt64_To_LE(this ulong n, byte[] bs, int off)
+        {
+            UInt32_To_LE((uint)(n), bs, off);
+            UInt32_To_LE((uint)(n >> 32), bs, off + 4);
+        }
+
+        /// <summary>
+        /// Pads a byte array to a fixed length or returns the array if already the correct size or larger
+        /// </summary>
+        /// <param name="buffer">The byte array to pad</param>
+        /// <param name="desiredLength">The byte array to pad</param>
+        public static byte[] PadByteArray(this byte[] buffer, int desiredLength)
+        {
+            // Can't pad nothing...
+            if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+
+            // Determine how many padding bytes we need
+            var fill = desiredLength - buffer.Length;
+
+            // If we don't need any padding, just return the array
+            if (fill <= 0) return (byte[])buffer.Clone();
+
+            // Create a new array of the correct size
+            var result = new byte[desiredLength];
+            // Copy the buffer into the new array at the correct index
+            Array.Copy(buffer, 0, result, fill, buffer.Length);
+
+            return result;
+        }
+
+        public static T Process<T>(this SecureString src, Func<byte[], T> func)
+        {
+            var binaryString = IntPtr.Zero;
+            byte[] workArray = null;
+            GCHandle? handle = null;
+            try
+            {
+                /*** PLAINTEXT EXPOSURE BEGINS HERE ***/
+                binaryString = Marshal.SecureStringToBSTR(src);
+                unsafe
+                {
+                    var bstrBytes = (byte*)binaryString;
+                    workArray = new byte[src.Length * 2];
+                    handle = GCHandle.Alloc(workArray, GCHandleType.Pinned);
+                
+                    for (var i = 0; i < workArray.Length; i++) workArray[i] = *bstrBytes++;
+                }
+
+                return func(workArray);
+            }
+            finally
+            {
+                if (workArray != null) for (var i = 0; i < workArray.Length; i++) workArray[i] = 0;
+                if (binaryString != IntPtr.Zero) Marshal.ZeroFreeBSTR(binaryString);
+
+                handle?.Free();
+
+                /*** PLAINTEXT EXPOSURE ENDS HERE ***/
+            }
+        }
+
+        public static T ReturnWithException<T>(Exception ex, T returnValue)
+        {
+            Logger.Log(ex);
+            return returnValue;
+        }
+        public static T ReturnWithException<T>(Exception ex)
+        {
+            Logger.Log(ex);
+            return default;
         }
     }
 }
